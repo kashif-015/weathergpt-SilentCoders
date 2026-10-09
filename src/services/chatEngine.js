@@ -9,6 +9,7 @@ import {
   getHistoricalWeather,
   getIndiaEarthquakes,
   getRecentEarthquakes,
+  getUserLocation,
 } from './weatherService.js';
 
 import {
@@ -26,6 +27,7 @@ import {
 
 // Intent matchers
 const INTENTS = [
+  { type: 'location', patterns: [/\b(?:live|current|my)\s+location\b/i, /\bwhere am i\b/i, /\bmera location\b/i, /\bmeri location\b/i, /\blocate me\b/i, /\bdetect.*location\b/i, /\bmeri jagah\b/i] },
   { type: 'forecast', patterns: [/forecast/i, /next\s*\d+\s*days?/i, /week/i, /upcoming/i, /tomorrow/i, /this week/i, /\bwill it\b/i] },
   { type: 'current', patterns: [/current/i, /right now/i, /now/i, /today/i, /temperature/i, /weather in/i, /how.*weather/i, /what.*weather/i, /\bhot\b/i, /\bcold\b/i, /mausam/i] },
   { type: 'rain', patterns: [/rain/i, /rainfall/i, /precipitation/i, /umbrella/i, /drizzle/i, /shower/i, /monsoon/i, /barish/i, /baarish/i, /pani/i] },
@@ -57,7 +59,7 @@ function extractCity(query) {
     const match = query.match(p);
     if (match) {
       const city = match[1].trim().replace(/[?.!,]/g, '');
-      if (city.length > 2 && city.length < 35 && !['today', 'tomorrow', 'weather', 'forecast', 'what', 'how', 'when', 'will', 'this', 'aaj', 'kal', 'kaisa', 'kaise'].includes(city.toLowerCase())) {
+      if (city.length > 2 && city.length < 35 && !['today', 'tomorrow', 'weather', 'forecast', 'what', 'how', 'when', 'will', 'this', 'aaj', 'kal', 'kaisa', 'kaise', 'location', 'live location', 'current location', 'here', 'my city', 'my area', 'my location'].includes(city.toLowerCase())) {
         return city;
       }
     }
@@ -303,9 +305,17 @@ export async function processQuery(query, userLocation, history = [], userProfil
     // therefore cannot generate a weather answer. Regex matching is used only
     // when no LLM key is configured or the router is unavailable.
     if (route?.action === 'off_topic') {
-      return { type: 'text', source: ['WeatherGPT Router'], text: "I'm here for weather and disaster information—ask me about forecasts or alerts." };
+      const llmResult = await queryLLMWithFunctionCalling(query, { note: 'Conversational or general question. Respond helpfully, politely and concisely in the user language, mentioning WeatherGPT can provide live weather and disaster alerts.' }, history, userProfile);
+      if (llmResult.text) {
+        return { type: 'text', source: [llmResult.provider || 'Gemini'], text: llmResult.text };
+      }
+      return { type: 'text', source: ['WeatherGPT Router'], text: "I'm here for weather and disaster information—ask me about forecasts or alerts in any location." };
     }
     if (route?.action === 'no_data') {
+      const llmResult = await queryLLMWithFunctionCalling(query, { note: 'Specific weather data unavailable. Politely explain and offer to check current weather or forecast.' }, history, userProfile);
+      if (llmResult.text) {
+        return { type: 'text', source: [llmResult.provider || 'Gemini'], text: llmResult.text };
+      }
       return { type: 'text', source: ['WeatherGPT Router'], text: "I don't have data for that right now. Try current conditions or the forecast." };
     }
     if (route?.action === 'clarify') {
@@ -332,6 +342,31 @@ export async function processQuery(query, userLocation, history = [], userProfil
     const intent = ({ current_weather: 'current', alerts: 'alert' }[routedTool] || routedTool || fallbackIntent);
 
     switch (intent) {
+      case 'location': {
+        let freshLoc = location;
+        try {
+          freshLoc = await getUserLocation(true);
+        } catch {}
+        const weather = await getCurrentWeather(freshLoc.lat, freshLoc.lon);
+        const sources = ['Live Geolocation', 'Open-Meteo'];
+        const llmResult = await queryLLMWithFunctionCalling(query, {
+          weather,
+          location: freshLoc.city || freshLoc.name,
+          state: freshLoc.state,
+          country: freshLoc.country,
+          coordinates: { lat: freshLoc.lat, lon: freshLoc.lon }
+        }, history, userProfile);
+        if (llmResult.text) {
+          sources.push(llmResult.provider);
+          return { type: 'weather', text: llmResult.text, data: weather, source: sources, location: freshLoc, weather, isUserLocation: true };
+        }
+        const isHindi = userProfile?.language === 'hi';
+        const text = isHindi
+          ? `📍 **आपकी लाइव लोकेशन:** **${freshLoc.city || freshLoc.name}** (${freshLoc.state ? freshLoc.state + ', ' : ''}${freshLoc.country || ''})\n\n🌡️ **वर्तमान मौसम:** ${weather.temp}°C, ${weather.description} (महसूस हो रहा है: ${weather.feelsLike}°C)\n💧 **नमी:** ${weather.humidity}%\n💨 **हवा:** ${weather.windSpeed} km/h\n📊 **निर्देशांक:** ${freshLoc.lat.toFixed(4)}°N, ${freshLoc.lon.toFixed(4)}°E`
+          : `📍 **Your Detected Live Location:** **${freshLoc.city || freshLoc.name}** (${freshLoc.state ? freshLoc.state + ', ' : ''}${freshLoc.country || ''})\n\n🌡️ **Current Weather:** ${weather.temp}°C, ${weather.description} (Feels like: ${weather.feelsLike}°C)\n💧 **Humidity:** ${weather.humidity}%\n💨 **Wind:** ${weather.windSpeed} km/h\n📊 **Coordinates:** ${freshLoc.lat.toFixed(4)}°N, ${freshLoc.lon.toFixed(4)}°E (Source: ${freshLoc.source || 'GPS/IP'})`;
+        return { type: 'weather', text, data: weather, source: sources, location: freshLoc, weather, isUserLocation: true };
+      }
+
       case 'greeting': {
         const weather = await getCurrentWeather(location.lat, location.lon);
         const sources = ['Open-Meteo'];
@@ -349,13 +384,24 @@ export async function processQuery(query, userLocation, history = [], userProfil
         };
       }
 
-      case 'help':
+      case 'help': {
+        const sources = ['WeatherGPT Assistant'];
+        const llmResult = await queryLLMWithFunctionCalling(query, {
+          location: locName,
+          guideTopic: 'Capabilities & User Assistance',
+          features: ['Live Weather & Travel', '7-Day Forecast', 'Monsoon & Rain Alerts', 'Earthquakes & Tsunami', 'Cyclone Tracking', 'Agromet & Crop Advice', 'Climate Insights']
+        }, history, userProfile);
+        if (llmResult.text) {
+          sources.push(llmResult.provider);
+          return { type: 'text', text: llmResult.text, source: sources };
+        }
         return {
           type: 'text',
           text: userProfile?.language === 'hi'
             ? `WeatherGPT आपकी सहायता निम्नलिखित विषयों में कर सकता है:\n\n🌤️ **लाइव मौसम व यात्रा सलाह** — "जयपुर में मौसम कैसा है?"\n📅 **7-दिवसीय पूर्वानुमान** — "क्या दिल्ली में सप्ताहांत बारिश होगी?"\n🌧️ **मानसून सलाह** — "क्या मुंबई में आज छाते की जरूरत है?"\n🔴 **भूकंप अलर्ट** — "उत्तर भारत के आसपास हाल के भूकंप?"\n🌾 **नासा एवं कृषि सलाह** — "पंजाब के किसानों के लिए सिंचाई परामर्श"\n📊 **जलवायु रुझान** — "चेन्नई में तापमान में क्या बदलाव आया है?"`
             : `Here is what WeatherGPT can assist you with in any language (English, Hinglish, Hindi, etc.):\n\n🌤️ **Live Weather & Travel** — "How's the weather in Jaipur?" / "Delhi me aaj mausam kaisa hai?"\n📅 **7-Day Forecasts** — "Will it rain in Delhi this weekend?" / "Kya kal barish hogi?"\n🌧️ **Monsoon & Outdoor Advice** — "Do I need an umbrella in Mumbai today?"\n🔴 **Seismic Activity** — "Any earthquake reports near North India?"\n⛈️ **Cyclones & Storms** — "Is there any cyclone threat in Bengal?"\n🌾 **NASA Agromet Advisories** — "Crop watering advisory for Punjab farmers"\n📊 **ERA5 Climate Trends** — "How has summer temperature changed in Chennai?"\n🔔 **Disaster Push Alerts** — "Check active severe weather warnings"`,
         };
+      }
 
       case 'current':
       case 'rain':

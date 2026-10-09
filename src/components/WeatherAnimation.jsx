@@ -37,7 +37,7 @@ export const WEATHER_ANIMATIONS = [
 
 export function resolveWeatherAnimationType(weather) {
   if (!weather) return 'sunny';
-  
+
   // Explicit override if passed
   if (weather.animationType) return weather.animationType;
 
@@ -57,8 +57,8 @@ export function resolveWeatherAnimationType(weather) {
   const isSunrise = hour >= 5 && hour < 7;
   const isSunset = hour >= 17 && hour < 20;
 
-  const code = weather.weatherCode !== undefined 
-    ? Number(weather.weatherCode) 
+  const code = weather.weatherCode !== undefined
+    ? Number(weather.weatherCode)
     : (weather.condition?.code !== undefined ? Number(weather.condition.code) : null);
   const desc = (weather.description || weather.condition?.label || '').toLowerCase();
 

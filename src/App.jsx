@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getCurrentWeather, getForecast, getUserLocation, reverseGeocode } from './services/weatherService.js';
+import { getCurrentWeather, getForecast, getUserLocation, reverseGeocode, getStoredLocation, onLocationPermissionChange, geocodeCity } from './services/weatherService.js';
 import { processQuery } from './services/chatEngine.js';
 import { getCurrentUserProfile, signOutUser, observeAuthState } from './services/firebaseClient.js';
 import { getTranslation } from './services/translations.js';
@@ -882,6 +882,9 @@ export default function App() {
   const [weather, setWeather] = useState(null);
   const [severity, setSeverity] = useState('green');
   const [location, setLocation] = useState(null);
+  // Dedicated state for user's actual live detected current location (never overridden by chat queries for other cities)
+  const [currentLocation, setCurrentLocation] = useState(null);
+  const [currentWeather, setCurrentWeather] = useState(null);
   const [selectedDistrictAlert, setSelectedDistrictAlert] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try {
@@ -967,57 +970,97 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const pos = await getUserLocation();
-        let geo = {};
-        if (pos.city && pos.country && pos.city !== 'Unknown') {
-          geo = { city: pos.city, state: pos.state || '', country: pos.country };
-        } else {
-          try {
-            geo = await reverseGeocode(pos.lat, pos.lon);
-          } catch (e) {
-            console.warn('Reverse geocode error:', e);
-          }
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+
+  const detectLiveLocation = useCallback(async (forceRefresh = false) => {
+    setIsDetectingLocation(true);
+    try {
+      const pos = await getUserLocation(forceRefresh);
+      let geo = {};
+      if (pos.city && pos.country && pos.city !== 'Unknown' && pos.city !== 'Live Location') {
+        geo = { city: pos.city, state: pos.state || '', country: pos.country || 'India' };
+      } else {
+        try {
+          geo = await reverseGeocode(pos.lat, pos.lon);
+        } catch (e) {
+          console.warn('[Location] Reverse geocode error:', e);
         }
+      }
 
-        const cityName = (geo.city && geo.city !== 'Unknown')
-          ? geo.city
-          : (pos.city && pos.city !== 'Unknown')
-            ? pos.city
-            : 'Your Location';
+      const cityName = (geo.city && geo.city !== 'Unknown')
+        ? geo.city
+        : (pos.city && pos.city !== 'Unknown')
+          ? pos.city
+          : 'Your Location';
 
-        const locObj = {
-          lat: pos.lat,
-          lon: pos.lon,
-          city: cityName,
-          state: geo.state || pos.state || '',
-          country: geo.country || pos.country || '',
-          name: cityName,
-        };
+      const locObj = {
+        lat: Number(pos.lat),
+        lon: Number(pos.lon),
+        city: cityName,
+        state: geo.state || pos.state || '',
+        country: geo.country || pos.country || 'India',
+        name: cityName,
+        source: pos.source || 'gps',
+        isApproximate: Boolean(pos.isApproximate),
+      };
 
-        if (!isMounted) return;
-        setLocation(locObj);
+      setCurrentLocation(locObj);
+      setLocation(locObj);
 
-        const w = await getCurrentWeather(pos.lat, pos.lon);
-        if (!isMounted) return;
+      const w = await getCurrentWeather(pos.lat, pos.lon);
+      setCurrentWeather(w);
+      setWeather(w);
+      if (w.windSpeed > 60 || w.temp >= 42) setSeverity('red');
+      else if (w.windSpeed > 40 || w.temp >= 40) setSeverity('orange');
+      else if (w.windSpeed > 25 || w.temp >= 37) setSeverity('yellow');
+      else setSeverity('green');
+      return locObj;
+    } catch (err) {
+      console.error('[Location] Location detection failed:', err);
+      const fb = { lat: 21.1915, lon: 81.2762, city: 'Durg', name: 'Durg', state: 'Chhattisgarh', country: 'India', source: 'fallback', isApproximate: true };
+      setCurrentLocation(fb);
+      setLocation(fb);
+      try {
+        const w = await getCurrentWeather(fb.lat, fb.lon);
+        setCurrentWeather(w);
+        setWeather(w);
+      } catch {}
+      return fb;
+    } finally {
+      setIsDetectingLocation(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // 1. Immediately hydrate from stored location if available for zero-latency initial UI
+    const cached = getStoredLocation();
+    if (cached?.lat && cached?.lon) {
+      setCurrentLocation(cached);
+      setLocation(cached);
+      getCurrentWeather(cached.lat, cached.lon).then((w) => {
+        setCurrentWeather(w);
         setWeather(w);
         if (w.windSpeed > 60 || w.temp >= 42) setSeverity('red');
         else if (w.windSpeed > 40 || w.temp >= 40) setSeverity('orange');
         else if (w.windSpeed > 25 || w.temp >= 37) setSeverity('yellow');
         else setSeverity('green');
-      } catch (err) {
-        console.error('Location initialization failed:', err);
-        if (!isMounted) return;
-        const fb = { lat: 21.7345, lon: 81.9471, city: 'Bhatapara', name: 'Bhatapara', state: 'Chhattisgarh', country: 'India' };
-        setLocation(fb);
-        try { setWeather(await getCurrentWeather(fb.lat, fb.lon)); } catch {}
+      }).catch(() => {});
+    }
+
+    // 2. Automatically request user's true live location (GPS / Wi-Fi) without waiting
+    detectLiveLocation(true);
+
+    // 3. React instantly when the user clicks 'Allow' in the browser location prompt
+    const unsubscribe = onLocationPermissionChange((permState) => {
+      if (permState === 'granted') {
+        detectLiveLocation(true);
       }
-    })();
-    return () => { isMounted = false; };
-  }, []);
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [detectLiveLocation]);
 
   const setAppLanguage = (langCode) => {
     setCurrentLang(langCode);
@@ -1112,15 +1155,21 @@ export default function App() {
 
     try {
       const activeProfile = userProfile ? { ...userProfile, language: currentLang } : { language: currentLang };
-      const response = await processQuery(text, location, messages, activeProfile);
+      const response = await processQuery(text, currentLocation || location, messages, activeProfile);
       const botMsg = {
         id: Date.now() + 1, role: 'bot', text: response.text,
         type: response.type, data: response.data, severity: response.severity,
         source: response.source, timestamp: new Date(),
+        location: response.location, weather: response.weather,
       };
       if (response.severity) setSeverity(response.severity);
-      if (response.weather) setWeather(response.weather);
-      if (response.location) setLocation(response.location);
+      // ONLY update the dashboard's current location if the query explicitly requested live user location detection
+      if (response.isUserLocation && response.location) {
+        setCurrentLocation(response.location);
+        if (response.weather) setCurrentWeather(response.weather);
+        setLocation(response.location);
+        if (response.weather) setWeather(response.weather);
+      }
 
       setTimeout(() => {
         setIsTyping(false);
@@ -1195,7 +1244,7 @@ export default function App() {
 
     try {
       const activeProfile = userProfile ? { ...userProfile, language: currentLang } : { language: currentLang };
-      const response = await processQuery(newText.trim(), location, previousHistory, activeProfile);
+      const response = await processQuery(newText.trim(), currentLocation || location, previousHistory, activeProfile);
       const botMsg = {
         id: Date.now() + 1,
         role: 'bot',
@@ -1205,10 +1254,16 @@ export default function App() {
         severity: response.severity,
         source: response.source,
         timestamp: new Date(),
+        location: response.location,
+        weather: response.weather,
       };
       if (response.severity) setSeverity(response.severity);
-      if (response.weather) setWeather(response.weather);
-      if (response.location) setLocation(response.location);
+      if (response.isUserLocation && response.location) {
+        setCurrentLocation(response.location);
+        if (response.weather) setCurrentWeather(response.weather);
+        setLocation(response.location);
+        if (response.weather) setWeather(response.weather);
+      }
 
       setTimeout(() => {
         setIsTyping(false);
@@ -1306,8 +1361,34 @@ export default function App() {
 
   const t = (key) => getTranslation(key, currentLang);
 
-  const handleSearch = (query) => {
-    sendMessage(query);
+  const handleSearch = async (query) => {
+    if (!query || !query.trim()) return;
+    const clean = query.trim();
+    // Geocode to see if this matches a city and update active location
+    try {
+      const place = await geocodeCity(clean);
+      if (place?.lat && place?.lon) {
+        const newLoc = {
+          lat: Number(place.lat),
+          lon: Number(place.lon),
+          city: place.name,
+          name: place.name,
+          state: place.admin1 || '',
+          country: place.country || 'India',
+          source: 'search',
+          isApproximate: false,
+        };
+        setLocation(newLoc);
+        getCurrentWeather(newLoc.lat, newLoc.lon).then((w) => {
+          setWeather(w);
+          if (w.windSpeed > 60 || w.temp >= 42) setSeverity('red');
+          else if (w.windSpeed > 40 || w.temp >= 40) setSeverity('orange');
+          else if (w.windSpeed > 25 || w.temp >= 37) setSeverity('yellow');
+          else setSeverity('green');
+        }).catch(() => {});
+      }
+    } catch {}
+    sendMessage(clean);
   };
 
   const handlePromptClick = (text) => {
@@ -1356,8 +1437,8 @@ export default function App() {
       case 'home':
         return (
           <HomePage
-            weather={weather}
-            location={location}
+            weather={currentWeather || weather}
+            location={currentLocation || location}
             onPromptClick={handlePromptClick}
             currentLang={currentLang}
             onNavigateForecast={() => handleNavigate('forecast')}
@@ -1436,7 +1517,7 @@ export default function App() {
         return <AlertsPage location={location} districtAlert={selectedDistrictAlert} onBackToChat={() => handleNavigate('chat')} />;
 
       case 'maps':
-        return <WeatherMap location={location} onOpenDistrictWarning={(alert) => { setSelectedDistrictAlert(alert); setActivePage('alerts'); }} />;
+        return <WeatherMap location={location} onBack={() => handleNavigate('home')} onOpenDistrictWarning={(alert) => { setSelectedDistrictAlert(alert); setActivePage('alerts'); }} />;
 
       case 'agriculture':
         return <AgricultureAdvisory location={location} />;
@@ -1447,8 +1528,8 @@ export default function App() {
       default:
         return (
           <HomePage
-            weather={weather}
-            location={location}
+            weather={currentWeather || weather}
+            location={currentLocation || location}
             onPromptClick={handlePromptClick}
             currentLang={currentLang}
             onNavigateForecast={() => handleNavigate('forecast')}
@@ -1501,12 +1582,14 @@ export default function App() {
           activePage={activePage}
           onNavigate={handleNavigate}
           onNavigateForecast={() => handleNavigate('forecast')}
-          weather={weather}
-          location={location}
+          weather={currentWeather || weather}
+          location={currentLocation || location}
           userProfile={userProfile}
           onSearch={handleSearch}
           onOpenAuth={() => setShowAuthModal(true)}
           onToggleMenu={() => handleToggleSidebar()}
+          onDetectLocation={() => detectLiveLocation(true)}
+          isDetectingLocation={isDetectingLocation}
         />
 
         <div className="app-workspace">
@@ -1516,8 +1599,8 @@ export default function App() {
 
           {activePage === 'home' && (
             <RightPanel
-              weather={weather}
-              location={location}
+              weather={currentWeather || weather}
+              location={currentLocation || location}
               onNavigateAlerts={() => setActivePage('alerts')}
               onNavigateMaps={() => setActivePage('maps')}
             />

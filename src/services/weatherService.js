@@ -103,9 +103,9 @@ export async function getCurrentWeather(lat, lon) {
   return result;
 }
 
-// 7-day forecast
+// 15-day forecast
 export async function getForecast(lat, lon) {
-  const key = `forecast:${lat},${lon}`;
+  const key = `forecast16:${lat},${lon}`;
   const cached = getCached(key);
   if (cached) return cached;
 
@@ -211,116 +211,264 @@ export async function getIndiaEarthquakes() {
   return quakes;
 }
 
-// Browser geolocation with automatic IP fallback
-export async function getUserLocation() {
-  // 1. Try GPS / Browser Geolocation first
-  if (typeof navigator !== 'undefined' && navigator.geolocation) {
+// Browser geolocation with automatic multi-tier fallback
+// Helper to get previously stored location synchronously
+export function getStoredLocation() {
+  try {
+    const stored = localStorage.getItem('weathergpt_last_location');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed?.lat && parsed?.lon) return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+// Listen for browser geolocation permission changes
+export function onLocationPermissionChange(callback) {
+  if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+    let active = true;
+    navigator.permissions.query({ name: 'geolocation' })
+      .then(status => {
+        if (!active) return;
+        status.onchange = () => {
+          if (active) callback(status.state);
+        };
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }
+  return () => {};
+}
+
+// Browser geolocation with automatic multi-tier fallback
+export async function getUserLocation(forceRefresh = false) {
+  const saveLocation = (loc) => {
     try {
-      const gpsPos = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          pos => resolve({
-            lat: pos.coords.latitude,
-            lon: pos.coords.longitude,
+      localStorage.setItem('weathergpt_last_location', JSON.stringify({ ...loc, savedAt: Date.now() }));
+    } catch {}
+    return loc;
+  };
+
+  // If not forcing refresh, check if we have a recent VERIFIED GPS location (< 15 mins)
+  if (!forceRefresh) {
+    try {
+      const stored = localStorage.getItem('weathergpt_last_location');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Only trust recent GPS cache. Never let stale IP-based location block live GPS!
+        if (parsed?.lat && parsed?.lon && parsed?.city && parsed.source === 'gps' && Date.now() - (parsed.savedAt || 0) < 15 * 60 * 1000) {
+          return parsed;
+        }
+      }
+    } catch {}
+  }
+
+  // Check permission state if supported
+  let permissionState = 'prompt';
+  if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+    try {
+      const perm = await navigator.permissions.query({ name: 'geolocation' });
+      permissionState = perm.state; // 'granted', 'prompt', or 'denied'
+    } catch {}
+  }
+
+  // 1. Try Browser Geolocation (GPS / Wi-Fi positioning) unless explicitly denied
+  if (typeof navigator !== 'undefined' && navigator.geolocation && permissionState !== 'denied') {
+    const getPositionPromise = (timeoutMs, enableHighAccuracy) =>
+      new Promise((resolve, reject) => {
+        let settled = false;
+        let watchId = null;
+
+        const onDone = (pos) => {
+          if (settled) return;
+          settled = true;
+          if (watchId !== null) {
+            try { navigator.geolocation.clearWatch(watchId); } catch {}
+          }
+          resolve({
+            lat: Number(pos.coords.latitude),
+            lon: Number(pos.coords.longitude),
             accuracy: pos.coords.accuracy,
-            source: 'gps'
-          }),
-          err => reject(err),
-          // Request a fresh precise fix instead of reusing a stale network position.
-          { timeout: 15000, enableHighAccuracy: true, maximumAge: 0 }
-        );
+            source: 'gps',
+            isApproximate: false,
+          });
+        };
+
+        const onFail = (err) => {
+          if (settled) return;
+          settled = true;
+          if (watchId !== null) {
+            try { navigator.geolocation.clearWatch(watchId); } catch {}
+          }
+          reject(err);
+        };
+
+        // Standard getCurrentPosition
+        navigator.geolocation.getCurrentPosition(onDone, onFail, {
+          enableHighAccuracy,
+          timeout: timeoutMs,
+          maximumAge: 15000,
+        });
+
+        // Parallel watchPosition catches the quickest satellite/Wi-Fi lock
+        try {
+          watchId = navigator.geolocation.watchPosition(
+            (pos) => {
+              if (pos?.coords?.latitude && pos?.coords?.longitude) {
+                onDone(pos);
+              }
+            },
+            () => {},
+            { enableHighAccuracy, timeout: timeoutMs, maximumAge: 15000 }
+          );
+        } catch {}
       });
-      return gpsPos;
+
+    try {
+      // Responsive timeouts: avoid long freezing on devices without dedicated GPS hardware
+      const initialTimeout = permissionState === 'prompt' ? 8000 : 5000;
+      let gpsPos;
+
+      try {
+        // High accuracy attempt first
+        gpsPos = await getPositionPromise(initialTimeout, true);
+      } catch (highAccErr) {
+        // If high accuracy times out (common on Windows without dedicated GPS chip),
+        // fallback to network/cell/Wi-Fi triangulation which resolves instantly!
+        console.warn('[Location] High-accuracy GPS timed out/failed, trying standard network positioning:', highAccErr.message || highAccErr);
+        gpsPos = await getPositionPromise(4000, false);
+      }
+
+      if (gpsPos?.lat && gpsPos?.lon) {
+        // Reverse geocode to find exact city, town or locality
+        const geo = await reverseGeocode(gpsPos.lat, gpsPos.lon).catch(() => ({}));
+        const resolved = {
+          lat: gpsPos.lat,
+          lon: gpsPos.lon,
+          accuracy: gpsPos.accuracy,
+          city: geo.city || geo.name || 'Live Location',
+          state: geo.state || '',
+          country: geo.country || 'India',
+          name: geo.city || geo.name || 'Live Location',
+          source: 'gps',
+          isApproximate: false,
+        };
+        return saveLocation(resolved);
+      }
     } catch (gpsError) {
-      console.warn('Browser GPS unavailable, falling back to IP geolocation:', gpsError.message || gpsError);
+      console.warn('[Location] Browser Geolocation unavailable, falling back to IP/server detection:', gpsError.message || gpsError);
     }
   }
 
-  // 2. IP Geolocation Fallback (free, highly reliable, fast)
+  // 2. Client-side BigDataCloud IP Geolocation (Zero rate-limit, high accuracy, bypasses CORS)
+  try {
+    const bdcRes = await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client', {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (bdcRes.ok) {
+      const bdcData = await bdcRes.json();
+      if (bdcData.latitude && bdcData.longitude) {
+        const cityName = bdcData.city || bdcData.locality || bdcData.principalSubdivision || 'Current Location';
+        const resolved = {
+          lat: Number(bdcData.latitude),
+          lon: Number(bdcData.longitude),
+          city: cityName,
+          state: bdcData.principalSubdivision || '',
+          country: bdcData.countryName || 'India',
+          name: cityName,
+          source: 'ip',
+          isApproximate: true,
+        };
+        return saveLocation(resolved);
+      }
+    }
+  } catch (bdcErr) {
+    console.warn('[Location] BigDataCloud IP lookup failed:', bdcErr.message);
+  }
+
+  // 3. Backend Server Detection (/api/location/detect) — never blocked by adblockers
+  try {
+    const srvRes = await fetch(`${API_BASE}/location/detect`, {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (srvRes.ok) {
+      const srvData = await srvRes.json();
+      if (srvData?.data?.lat && srvData?.data?.lon) {
+        const d = srvData.data;
+        const resolved = {
+          lat: Number(d.lat),
+          lon: Number(d.lon),
+          city: d.city || d.name || 'Current City',
+          state: d.state || '',
+          country: d.country || 'India',
+          name: d.name || d.city || 'Current City',
+          source: 'server-ip',
+          isApproximate: true,
+        };
+        return saveLocation(resolved);
+      }
+    }
+  } catch (srvErr) {
+    console.warn('[Location] Server location detection failed:', srvErr.message);
+  }
+
+  // 4. IP Geolocation via ipwho.is
   try {
     const ipRes = await fetch('https://ipwho.is/', { signal: AbortSignal.timeout(5000) });
     if (ipRes.ok) {
       const ipData = await ipRes.json();
       if (ipData.success && ipData.latitude && ipData.longitude) {
-        return {
+        const resolved = {
           lat: Number(ipData.latitude),
           lon: Number(ipData.longitude),
           city: ipData.city || ipData.region,
-          state: ipData.region,
-          country: ipData.country,
+          state: ipData.region || '',
+          country: ipData.country || 'India',
           name: ipData.city || ipData.region,
-          source: 'ip'
+          source: 'ip',
+          isApproximate: true,
         };
+        return saveLocation(resolved);
       }
     }
   } catch (ipErr) {
-    console.warn('ipwho.is failed, trying secondary IP service:', ipErr.message);
+    console.warn('[Location] ipwho.is failed:', ipErr.message);
   }
 
-  // 3. Secondary IP Geolocation Fallback (ipapi.co)
+  // 5. Check any previously saved location in localStorage
   try {
-    const res2 = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(4000) });
-    if (res2.ok) {
-      const data2 = await res2.json();
-      if (data2.latitude && data2.longitude) {
-        return {
-          lat: Number(data2.latitude),
-          lon: Number(data2.longitude),
-          city: data2.city || data2.region,
-          state: data2.region,
-          country: data2.country_name,
-          name: data2.city || data2.region,
-          source: 'ip'
-        };
-      }
+    const prev = localStorage.getItem('weathergpt_last_location');
+    if (prev) {
+      const parsed = JSON.parse(prev);
+      if (parsed?.lat && parsed?.lon) return parsed;
     }
-  } catch (err2) {
-    console.warn('Secondary IP service failed:', err2.message);
-  }
+  } catch {}
 
-  // 4. Default fallback if all offline
+  // 6. Default fallback
   return {
-    lat: 21.7345,
-    lon: 81.9471,
-    city: 'Bhatapara',
+    lat: 21.1915,
+    lon: 81.2762,
+    city: 'Durg',
     state: 'Chhattisgarh',
     country: 'India',
-    name: 'Bhatapara',
-    source: 'fallback'
+    name: 'Durg',
+    source: 'fallback',
+    isApproximate: true,
   };
 }
 
 // Reverse geocode with robust fallback chain
 export async function reverseGeocode(lat, lon) {
-  const key = `rgeo:${Number(lat).toFixed(2)},${Number(lon).toFixed(2)}`;
+  const key = `rgeo:${Number(lat).toFixed(3)},${Number(lon).toFixed(3)}`;
   const cached = getCached(key);
   if (cached) return cached;
 
-  // 1. Try backend geocode endpoint
-  try {
-    const res = await fetch(`${API_BASE}/geocode?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`, {
-      signal: AbortSignal.timeout(5000)
-    });
-    if (res.ok) {
-      const data = await readApiJson(res);
-      if (data?.data?.name && data.data.name !== 'Unknown') {
-        const result = {
-          city: data.data.name,
-          state: data.data.state || '',
-          country: data.data.country || '',
-        };
-        setCache(key, result);
-        return result;
-      }
-    }
-  } catch (err) {
-    console.warn('Backend reverse geocode failed, trying client fallback:', err.message);
-  }
-
-  // 2. Client-side BigDataCloud reverse geocode (unlimited, zero-key, high accuracy)
+  // 1. Client-side BigDataCloud reverse geocode (fastest, unthrottled, highly accurate for cities & localities)
   try {
     const bdcRes = await fetch(
       `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&localityLanguage=en`,
-      { signal: AbortSignal.timeout(5000) }
+      { signal: AbortSignal.timeout(6000) }
     );
     if (bdcRes.ok) {
       const bdcData = await bdcRes.json();
@@ -328,19 +476,40 @@ export async function reverseGeocode(lat, lon) {
       const result = {
         city: cityName,
         state: bdcData.principalSubdivision || '',
-        country: bdcData.countryName || '',
+        country: bdcData.countryName || 'India',
       };
       setCache(key, result);
       return result;
     }
   } catch (bdcErr) {
-    console.warn('BigDataCloud reverse geocode failed:', bdcErr.message);
+    console.warn('[Location] BigDataCloud reverse geocode failed, falling back to server geocode:', bdcErr.message);
+  }
+
+  // 2. Try backend geocode endpoint (OpenStreetMap Nominatim + server BigDataCloud)
+  try {
+    const res = await fetch(`${API_BASE}/geocode?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`, {
+      signal: AbortSignal.timeout(6000)
+    });
+    if (res.ok) {
+      const data = await readApiJson(res);
+      if (data?.data?.name && data.data.name !== 'Unknown') {
+        const result = {
+          city: data.data.name,
+          state: data.data.state || '',
+          country: data.data.country || 'India',
+        };
+        setCache(key, result);
+        return result;
+      }
+    }
+  } catch (err) {
+    console.warn('[Location] Backend reverse geocode failed:', err.message);
   }
 
   // 3. Fallback
   return {
     city: 'Current Location',
     state: '',
-    country: '',
+    country: 'India',
   };
 }

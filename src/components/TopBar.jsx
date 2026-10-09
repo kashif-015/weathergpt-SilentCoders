@@ -10,7 +10,9 @@ export default function TopBar({
   userProfile,
   onSearch,
   onOpenAuth,
-  onToggleMenu
+  onToggleMenu,
+  onDetectLocation,
+  isDetectingLocation = false,
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
@@ -76,7 +78,8 @@ export default function TopBar({
         </div>
       </div>
 
-      <div className="topbar__right">
+      <div className="topbar__right" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
         {weather && location ? (
           <div
             className="topbar__weather-ctx"
@@ -108,7 +111,6 @@ export default function TopBar({
             </span>
           </div>
         )}
-
       </div>
 
       {/* Search Modal */}

@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { MapContainer, TileLayer, CircleMarker, useMap } from 'react-leaflet';
 import { getRecentEarthquakes } from '../services/weatherService.js';
 import { getGdacsAlerts } from '../services/apiClients.js';
 import WeatherAnimation from './WeatherAnimation.jsx';
 import WeatherIcon from './WeatherIcon.jsx';
 import { CheckCircle2, AlertTriangle, Activity } from 'lucide-react';
+import 'leaflet/dist/leaflet.css';
 
 function CurrentWeatherCard({ weather, location }) {
   const [previewAnim, setPreviewAnim] = useState(null);
@@ -105,11 +107,37 @@ function CurrentWeatherCard({ weather, location }) {
 );
 }
 
-function MapPreview({ onNavigate }) {
+const OWM_KEY = import.meta.env.VITE_OPENWEATHERMAP_API_KEY || '';
+const CARTO_KEY = import.meta.env.VITE_CARTO_BASEMAP_KEY || '';
+const CARTO_DARK_URL = `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png${CARTO_KEY ? `?key=${encodeURIComponent(CARTO_KEY)}` : ''}`;
+
+function MapRecenter({ center, zoom }) {
+  const map = useMap();
+  useEffect(() => {
+    if (center && Number.isFinite(center[0]) && Number.isFinite(center[1])) {
+      map.setView(center, zoom, { animate: true });
+    }
+  }, [center, zoom, map]);
+  return null;
+}
+
+function MapPreview({ onNavigate, location }) {
+  const center = useMemo(() => {
+    const lat = Number(location?.lat);
+    const lon = Number(location?.lon);
+    return Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : [22.8, 79.0];
+  }, [location?.lat, location?.lon]);
+
+  const zoom = useMemo(() => {
+    return Number.isFinite(Number(location?.lat)) ? 9 : 5;
+  }, [location?.lat]);
+
+  const locationName = location?.city || location?.name || 'India';
+
   return (
     <div className="rp-card rp-map-card">
       <div className="rp-card__header">
-        <h3>India Weather Map</h3>
+        <h3>Weather Map</h3>
         <button className="rp-card__action" onClick={onNavigate} title="Open full map" aria-label="Open full map">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1"/>
@@ -117,22 +145,68 @@ function MapPreview({ onNavigate }) {
         </button>
       </div>
       <div className="rp-map-card__preview">
-        <div className="rp-map-card__visual">
-          <div className="map-placeholder">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" opacity="0.3">
-              <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
-              <line x1="9" y1="3" x2="9" y2="18"/>
-              <line x1="15" y1="6" x2="15" y2="21"/>
-            </svg>
-            <span>India Weather Radar</span>
+        <div className="rp-map-card__visual rp-map-card__visual--live">
+          <MapContainer
+            center={center}
+            zoom={zoom}
+            zoomControl={false}
+            attributionControl={false}
+            dragging={false}
+            scrollWheelZoom={false}
+            doubleClickZoom={false}
+            touchZoom={false}
+            keyboard={false}
+            boxZoom={false}
+            className="rp-minimap"
+          >
+            <MapRecenter center={center} zoom={zoom} />
+            <TileLayer url={CARTO_DARK_URL} />
+            {OWM_KEY && (
+              <TileLayer
+                url={`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`}
+                opacity={0.5}
+              />
+            )}
+            {Number.isFinite(center[0]) && center[0] !== 22.8 && (
+              <>
+                <CircleMarker
+                  center={center}
+                  radius={18}
+                  pathOptions={{
+                    color: 'rgba(59, 130, 246, 0.3)',
+                    fillColor: 'rgba(59, 130, 246, 0.08)',
+                    fillOpacity: 1,
+                    weight: 1.5,
+                  }}
+                />
+                <CircleMarker
+                  center={center}
+                  radius={5}
+                  pathOptions={{
+                    color: '#3b82f6',
+                    fillColor: '#60a5fa',
+                    fillOpacity: 1,
+                    weight: 2,
+                  }}
+                />
+              </>
+            )}
+          </MapContainer>
+          <div className="rp-minimap-overlay" onClick={onNavigate} title="Click to explore full map">
+            <span className="rp-minimap-overlay__label">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                <circle cx="12" cy="10" r="3"/>
+              </svg>
+              {locationName}
+            </span>
           </div>
         </div>
         <div className="rp-map-card__legend">
-          <span><i style={{background:'#ff4444'}}/>Heavy Rain</span>
-          <span><i style={{background:'#ff9900'}}/>Moderate Rain</span>
-          <span><i style={{background:'#44bb44'}}/>Light Rain</span>
-          <span><i style={{background:'#888'}}/>Cloudy</span>
-          <span><i style={{background:'#4488ff'}}/>Clear</span>
+          <span><i style={{background:'#00e400'}}/>Light</span>
+          <span><i style={{background:'#f7e400'}}/>Moderate</span>
+          <span><i style={{background:'#ff7e00'}}/>Heavy</span>
+          <span><i style={{background:'#ff0000'}}/>Extreme</span>
         </div>
       </div>
     </div>
@@ -260,7 +334,7 @@ export default function RightPanel({ weather, location, onNavigateAlerts, onNavi
   return (
     <aside className="right-panel" aria-label="Weather information panel">
       <CurrentWeatherCard weather={weather} location={location} />
-      <MapPreview onNavigate={onNavigateMaps} />
+      <MapPreview onNavigate={onNavigateMaps} location={location} />
       <AlertsPreview onNavigate={onNavigateAlerts} />
     </aside>
   );

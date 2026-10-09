@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CircleMarker, GeoJSON, MapContainer, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
-import { ChevronDown, Layers, LoaderCircle, MapPin, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Layers, LoaderCircle, MapPin, X } from 'lucide-react';
 import { getBhuvanBoundaries, imdAPI } from '../services/apiClients.js';
 import 'leaflet/dist/leaflet.css';
 
@@ -139,7 +139,7 @@ function Recenter({ location }) {
   return null;
 }
 
-export default function WeatherMap({ location, onOpenDistrictWarning }) {
+export default function WeatherMap({ location, onBack, onOpenDistrictWarning }) {
   const [weatherLayers, setWeatherLayers] = useState({ precipitation: true, clouds: false, wind: false, temperature: false, pressure: false });
   const [hazardLayers, setHazardLayers] = useState({ districtWarnings: true, cycloneTrack: true, awsStations: false });
   const [layerMenuOpen, setLayerMenuOpen] = useState(false);
@@ -265,7 +265,12 @@ export default function WeatherMap({ location, onOpenDistrictWarning }) {
   return (
     <section className="weather-map-screen">
       <div className="weather-map-header">
-        <div><span className="eyebrow">WEATHERGPT · INDIA</span><h1>Weather Map</h1><p>{location?.name || location?.city || 'India'} · weather and district hazard layers</p></div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+          <button className="weather-map-back" onClick={onBack} title="Back to home" aria-label="Back to home">
+            <ArrowLeft size={20} />
+          </button>
+          <div><span className="eyebrow">WEATHERGPT · INDIA</span><h1>Weather Map</h1><p>{location?.name || location?.city || 'India'} · weather and district hazard layers</p></div>
+        </div>
         <button className="weather-map-refresh" onClick={loadHazards} disabled={loading}>{loading ? <LoaderCircle className="weather-map-spin" size={16} /> : '↻'} Refresh data</button>
       </div>
       <div className="weather-map-frame">

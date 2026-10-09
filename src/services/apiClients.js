@@ -431,17 +431,30 @@ ABSOLUTE DATA GROUNDING RULES (MANDATORY):
 - Seamlessly weave the real data figures into a warm, conversational response in the user's language.`;
 
 
-  // Build formatted contents for Gemini API
-  const geminiContents = [
-    ...history.slice(-6).map(m => ({
-      role: m.role === 'user' ? 'user' : 'model',
-      parts: [{ text: m.text }]
-    })),
-    {
-      role: 'user',
-      parts: [{ text: `${systemInstruction}\n\n[Real-Time Data Context]\n${JSON.stringify(contextData)}\n\n[User Query]\n${userMessage}` }]
+  // Build cleanly formatted contents for Gemini API conforming to multiturn rules
+  const sanitizedHistory = [];
+  const rawHistory = (history || []).slice(-6);
+  for (const m of rawHistory) {
+    if (!m?.text || typeof m.text !== 'string' || !m.text.trim()) continue;
+    const role = m.role === 'user' ? 'user' : 'model';
+    // Gemini multiturn conversation MUST start with user
+    if (sanitizedHistory.length === 0 && role === 'model') continue;
+    // Merge consecutive turns with the same role
+    if (sanitizedHistory.length > 0 && sanitizedHistory[sanitizedHistory.length - 1].role === role) {
+      sanitizedHistory[sanitizedHistory.length - 1].parts[0].text += `\n${m.text}`;
+    } else {
+      sanitizedHistory.push({ role, parts: [{ text: m.text }] });
     }
-  ];
+  }
+
+  const promptText = `${systemInstruction}\n\n[Real-Time Data Context]\n${JSON.stringify(contextData)}\n\n[User Query]\n${userMessage}`;
+  if (sanitizedHistory.length > 0 && sanitizedHistory[sanitizedHistory.length - 1].role === 'user') {
+    sanitizedHistory[sanitizedHistory.length - 1].parts[0].text += `\n\n${promptText}`;
+  } else {
+    sanitizedHistory.push({ role: 'user', parts: [{ text: promptText }] });
+  }
+
+  const geminiContents = sanitizedHistory;
 
   // The browser sends only the prompt and verified provider results. The
   // server owns every LLM credential and performs the actual model request.

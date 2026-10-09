@@ -105,8 +105,8 @@ app.get('/api/weather/forecast', async (req, res) => {
   const { lat, lon } = req.query;
   if (!lat || !lon) return res.status(400).json({ error: 'lat and lon are required.' });
   try {
-    const result = await cached(`forecast:${lat}:${lon}`, 15 * 60 * 1000, async () => {
-      const params = new URLSearchParams({ latitude: lat, longitude: lon, daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max', timezone: 'auto', forecast_days: '7' });
+    const result = await cached(`forecast16:${lat}:${lon}`, 15 * 60 * 1000, async () => {
+      const params = new URLSearchParams({ latitude: lat, longitude: lon, daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max', timezone: 'auto', forecast_days: '16' });
       return envelope('Open-Meteo', 'fallback', (await requestJson(`https://api.open-meteo.com/v1/forecast?${params}`)).daily);
     });
     res.json(result);
@@ -292,13 +292,32 @@ app.get('/api/forecast', async (req, res) => {
   const { lat, lon } = req.query;
   if (!lat || !lon) return res.status(400).json({ error: 'lat and lon are required.' });
   try {
-    const result = await cached(`phase2forecast:${lat}:${lon}`, 60 * 60 * 1000, async () => {
-      const params = new URLSearchParams({ latitude: lat, longitude: lon, timezone: 'auto', forecast_days: '7', current: 'temperature_2m', hourly: 'temperature_2m,weather_code,precipitation_probability,wind_speed_10m,wind_direction_10m', daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' });
+    const result = await cached(`phase3forecast16:${lat}:${lon}`, 30 * 60 * 1000, async () => {
+      const params = new URLSearchParams({ latitude: lat, longitude: lon, timezone: 'auto', forecast_days: '16', current: 'temperature_2m', hourly: 'temperature_2m,weather_code,precipitation_probability,wind_speed_10m,wind_direction_10m', daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' });
       const raw = await requestJson(`https://api.open-meteo.com/v1/forecast?${params}`); const hourly = raw.hourly || {}; const daily = raw.daily || {};
       const currentHourIndex = Math.max(0, (hourly.time || []).findIndex((time) => time >= raw.current?.time));
-      const hours = (hourly.time || []).slice(currentHourIndex, currentHourIndex + 24).map((time, i) => { const sourceIndex = currentHourIndex + i; const [label, icon] = wmo(hourly.weather_code?.[sourceIndex]); return { time, temp: Math.round(hourly.temperature_2m?.[sourceIndex]), icon, label, rainProbability: hourly.precipitation_probability?.[sourceIndex] ?? 0, windSpeed: Math.round(hourly.wind_speed_10m?.[sourceIndex]), windDirection: hourly.wind_direction_10m?.[sourceIndex], windCompass: compass(hourly.wind_direction_10m?.[sourceIndex]) }; });
+      const hours = (hourly.time || []).slice(currentHourIndex, currentHourIndex + 48).map((time, i) => { const sourceIndex = currentHourIndex + i; const [label, icon] = wmo(hourly.weather_code?.[sourceIndex]); return { time, temp: Math.round(hourly.temperature_2m?.[sourceIndex]), icon, label, rainProbability: hourly.precipitation_probability?.[sourceIndex] ?? 0, windSpeed: Math.round(hourly.wind_speed_10m?.[sourceIndex] ?? 0), windDirection: hourly.wind_direction_10m?.[sourceIndex], windCompass: compass(hourly.wind_direction_10m?.[sourceIndex]) }; });
+      
+      const todayDate = (daily.time?.[0]) || (raw.current?.time ? raw.current.time.split('T')[0] : '');
+      const todayHours = (hourly.time || [])
+        .map((time, i) => ({ time, i }))
+        .filter(item => item.time.startsWith(todayDate))
+        .map(item => {
+          const [label, icon] = wmo(hourly.weather_code?.[item.i]);
+          return {
+            time: item.time,
+            temp: Math.round(hourly.temperature_2m?.[item.i]),
+            icon,
+            label,
+            rainProbability: hourly.precipitation_probability?.[item.i] ?? 0,
+            windSpeed: Math.round(hourly.wind_speed_10m?.[item.i] ?? 0),
+            windDirection: hourly.wind_direction_10m?.[item.i],
+            windCompass: compass(hourly.wind_direction_10m?.[item.i])
+          };
+        });
+
       const days = (daily.time || []).map((date, i) => { const [label, icon] = wmo(daily.weather_code?.[i]); return { date, icon, label, maxTemp: Math.round(daily.temperature_2m_max?.[i]), minTemp: Math.round(daily.temperature_2m_min?.[i]), rainProbability: daily.precipitation_probability_max?.[i] ?? 0, source: 'Open-Meteo' }; });
-      return envelope('IMD + Open-Meteo', 'live', { hourly: hours, daily: days, sources: { hourly: 'Open-Meteo', daily: 'Open-Meteo fallback (IMD city mapping not available)' } });
+      return envelope('IMD + Open-Meteo', 'live', { hourly: hours, todayHourly: todayHours.length > 0 ? todayHours : hours.slice(0, 12), daily: days, sources: { hourly: 'Open-Meteo', daily: 'IMD / Open-Meteo 15-Day Forecast' } });
     });
     res.json(result);
   } catch { res.status(503).json(envelope('Open-Meteo', 'unavailable', null)); }
@@ -398,6 +417,60 @@ app.get('/api/climate/solar', async (req, res) => {
   } catch { res.status(503).json(envelope('NASA POWER', 'unavailable', null)); }
 });
 
+app.get('/api/location/detect', async (req, res) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  const clientIp = forwarded ? forwarded.split(',')[0].trim() : req.socket?.remoteAddress;
+  const isPrivate = !clientIp || clientIp === '127.0.0.1' || clientIp === '::1' || clientIp.startsWith('192.168.') || clientIp.startsWith('10.');
+
+  try {
+    const result = await cached(`ip-location:${isPrivate ? 'local' : clientIp}`, 60 * 60 * 1000, async () => {
+      // 1. Try ipwho.is
+      try {
+        const ipUrl = !isPrivate ? `https://ipwho.is/${encodeURIComponent(clientIp)}` : 'https://ipwho.is/';
+        const data = await requestJson(ipUrl);
+        if (data.success && data.latitude && data.longitude) {
+          return envelope('ipwho.is', 'live', {
+            lat: Number(data.latitude),
+            lon: Number(data.longitude),
+            city: data.city || data.region,
+            state: data.region || '',
+            country: data.country || '',
+            name: data.city || data.region,
+          });
+        }
+      } catch (e) {
+        console.warn('[Location] Server ipwho.is failed:', e.message);
+      }
+
+      // 2. Try BigDataCloud
+      try {
+        const bdcUrl = !isPrivate
+          ? `https://api.bigdatacloud.net/data/reverse-geocode-client?ip=${encodeURIComponent(clientIp)}`
+          : 'https://api.bigdatacloud.net/data/reverse-geocode-client';
+        const bdc = await requestJson(bdcUrl);
+        if (bdc.latitude && bdc.longitude) {
+          const name = bdc.city || bdc.locality || bdc.principalSubdivision || 'Unknown';
+          return envelope('BigDataCloud', 'live', {
+            lat: Number(bdc.latitude),
+            lon: Number(bdc.longitude),
+            city: name,
+            state: bdc.principalSubdivision || '',
+            country: bdc.countryName || '',
+            name,
+          });
+        }
+      } catch (e) {
+        console.warn('[Location] Server BigDataCloud failed:', e.message);
+      }
+
+      throw new Error('Unable to determine location from IP.');
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'Location detection failed.' });
+  }
+});
+
 app.post('/api/ai/generate', async (req, res) => {
   // Supports both Gemini and OpenAI (including NVIDIA's compatible API)
   // Priority: Try Gemini first (most reliable), fall back to OpenAI if configured
@@ -415,42 +488,68 @@ app.post('/api/ai/generate', async (req, res) => {
   try {
     // Try Gemini first (most reliable)
     if (geminiKey) {
-      console.log('[AI] Attempting Gemini request...');
-      try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents, generationConfig })
-        });
+      const geminiModels = ['gemini-3.5-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'];
+      for (const model of geminiModels) {
+        console.log(`[AI] Attempting Gemini request with ${model}...`);
+        try {
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents, generationConfig })
+          });
 
-        console.log('[AI] Gemini response status:', response.status);
-        const body = await response.json();
-        
-        if (response.status === 429) {
-          console.log('[AI] Gemini rate limited, trying OpenAI...');
-        } else if (!response.ok) {
-          console.error('[AI] Gemini failed:', response.status, body?.error?.message);
-        } else {
-          const text = body.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          if (text) {
-            console.log('[AI] Gemini success');
-            return res.json({ text, provider: 'Gemini 2.5 Flash' });
+          console.log(`[AI] Gemini (${model}) response status:`, response.status);
+          const body = await response.json();
+          
+          if (response.status === 429) {
+            console.log('[AI] Gemini rate limited, trying next model or fallback...');
+            continue;
+          } else if (response.status === 404) {
+            console.warn(`[AI] Gemini model ${model} not available (404), trying next...`);
+            continue;
+          } else if (response.status === 503) {
+            console.warn(`[AI] Gemini model ${model} temporarily unavailable (503), trying next...`);
+            continue;
+          } else if (!response.ok) {
+            console.error(`[AI] Gemini (${model}) failed:`, response.status, body?.error?.message);
+            continue;
+          } else {
+            const parts = body.candidates?.[0]?.content?.parts || [];
+            const text = parts.map(p => p.text || '').join('').trim();
+            if (text) {
+              console.log(`[AI] Gemini (${model}) success`);
+              return res.json({ text, provider: `Gemini (${model})` });
+            }
           }
+        } catch (error) {
+          console.error(`[AI] Gemini (${model}) error:`, error.message);
         }
-      } catch (error) {
-        console.error('[AI] Gemini error:', error.message);
       }
     }
 
     // Fall back to OpenAI/NVIDIA if Gemini failed/unavailable
     if (openaiKey) {
-      console.log('[AI] Attempting OpenAI request...');
+      console.log('[AI] Attempting OpenAI/NVIDIA request...');
       try {
-        // Convert Gemini format to OpenAI format
         const messages = contents.map(item => ({
           role: item.role === 'model' ? 'assistant' : 'user',
           content: item.parts?.map(p => p.text).join('\n') || ''
         }));
+
+        const isNvidia = openaiBaseURL.includes('nvidia');
+        const defaultModel = isNvidia ? 'meta/llama-3.2-11b-vision-instruct' : 'gpt-4o-mini';
+        const model = process.env.OPENAI_MODEL || defaultModel;
+
+        const payload = {
+          model,
+          messages,
+          temperature: generationConfig.temperature || 0.7,
+          max_tokens: 2048
+        };
+
+        if (generationConfig.responseMimeType === 'application/json' && !isNvidia) {
+          payload.response_format = { type: 'json_object' };
+        }
 
         const response = await fetch(`${openaiBaseURL}/chat/completions`, {
           method: 'POST',
@@ -458,23 +557,17 @@ app.post('/api/ai/generate', async (req, res) => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${openaiKey}`
           },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages,
-            temperature: generationConfig.temperature || 0.7,
-            max_tokens: 2048
-          })
+          body: JSON.stringify(payload)
         });
 
         console.log('[AI] OpenAI response status:', response.status);
         const text = await response.text();
-        console.log('[AI] OpenAI response:', text.slice(0, 200));
         
         let body;
         try {
           body = JSON.parse(text);
         } catch (e) {
-          console.error('[AI] OpenAI response parse error:', e.message);
+          console.error('[AI] OpenAI response parse error:', e.message, text.slice(0, 150));
           throw new Error('Invalid OpenAI response');
         }
         
@@ -490,8 +583,8 @@ app.post('/api/ai/generate', async (req, res) => {
         
         const resultText = body.choices?.[0]?.message?.content || '';
         if (resultText) {
-          console.log('[AI] OpenAI success');
-          return res.json({ text: resultText, provider: 'OpenAI' });
+          console.log('[AI] OpenAI success with model:', model);
+          return res.json({ text: resultText, provider: isNvidia ? 'NVIDIA NIM' : 'OpenAI' });
         }
       } catch (error) {
         console.error('[AI] OpenAI exception:', error.message);

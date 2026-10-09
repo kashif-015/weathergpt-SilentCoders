@@ -123,7 +123,7 @@ function Forecast({ forecast }) {
         ))}
       </div>
       <div className="section-heading">
-        <span>7-day outlook</span>
+        <span>15-day forecast</span>
         <small>Source: {forecast.sources.daily}</small>
       </div>
       <div className="daily-list">

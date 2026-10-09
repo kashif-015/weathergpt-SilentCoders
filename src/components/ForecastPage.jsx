@@ -3,6 +3,7 @@ import { getDashboard, getDashboardForecast, getActiveAlerts } from '../services
 import { getCurrentWeather, getForecast } from '../services/weatherService.js';
 import WeatherAnimation from './WeatherAnimation.jsx';
 import WeatherIcon from './WeatherIcon.jsx';
+import WaveForecastCard from './WaveForecastCard.jsx';
 import {
   AlertTriangle,
   Droplets,
@@ -276,7 +277,7 @@ export default function ForecastPage({ location, onBackToChat }) {
       {onBackToChat && (
         <button className="forecast-page__back" onClick={onBackToChat}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m15 18-6-6 6-6"/>
+            <path d="m15 18-6-6 6-6" />
           </svg>
           Back to Chat
         </button>
@@ -290,8 +291,8 @@ export default function ForecastPage({ location, onBackToChat }) {
           <div className="forecast-hero__content">
             <div className="forecast-hero__location">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-                <circle cx="12" cy="10" r="3"/>
+                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                <circle cx="12" cy="10" r="3" />
               </svg>
               <span>{location?.name || location?.city || 'Selected Location'}</span>
               <span style={{ opacity: 0.5 }}>· Live Conditions</span>
@@ -354,95 +355,9 @@ export default function ForecastPage({ location, onBackToChat }) {
         </section>
       )}
 
-      {/* Hourly Timeline */}
-      {forecast?.hourly && forecast.hourly.length > 0 && (
-        <section className="forecast-hourly" aria-label="Hourly Forecast">
-          <h3 className="forecast-section-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <polyline points="12 6 12 12 16 14"/>
-            </svg>
-            <span>Hourly Forecast</span>
-            <span className="forecast-section-sub">Next 24 Hours</span>
-          </h3>
-
-          <div
-            className="forecast-hourly__scroll"
-            ref={hourlyScrollRef}
-            onMouseDown={onScrollMouseDown}
-            onMouseMove={onScrollMouseMove}
-            onMouseUp={onScrollMouseUp}
-            onMouseLeave={onScrollMouseUp}
-          >
-            {forecast.hourly.map((h, idx) => {
-              const isNow = idx === 0;
-              return (
-                <div key={h.time || idx} className={`forecast-hour ${isNow ? 'forecast-hour--now' : ''}`}>
-                  <span className="forecast-hour__time">{isNow ? 'Now' : fmtHour(h.time)}</span>
-                  <span className="forecast-hour__icon">
-                    <WeatherIcon icon={h.icon} size={22} />
-                  </span>
-                  <span className="forecast-hour__temp">{Math.round(h.temp)}°</span>
-                  <span className="forecast-hour__rain">
-                    <Droplets size={12} color="#38bdf8" style={{ verticalAlign: 'middle', marginRight: 2 }} />
-                    {h.rainProbability ?? 0}%
-                  </span>
-                  <span className="forecast-hour__wind">{Math.round(h.windSpeed ?? 0)}k</span>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* 7-Day Forecast */}
-      {forecast?.daily && forecast.daily.length > 0 && (
-        <section className="forecast-daily" aria-label="7-Day Outlook">
-          <div style={{ padding: 'var(--sp-4) var(--sp-4) var(--sp-2)' }}>
-            <h3 className="forecast-section-title">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect width="18" height="18" x="3" y="4" rx="2" ry="2"/>
-                <line x1="16" x2="16" y1="2" y2="6"/>
-                <line x1="8" x2="8" y1="2" y2="6"/>
-                <line x1="3" x2="21" y1="10" y2="10"/>
-              </svg>
-              <span>7-Day Outlook</span>
-              <span className="forecast-section-sub">{forecast.sources?.daily || 'IMD / Open-Meteo'}</span>
-            </h3>
-          </div>
-
-          <div className="forecast-daily__list">
-            {forecast.daily.map((day, idx) => {
-              const minP = ((day.minTemp - minDailyTemp) / tempSpan) * 100;
-              const widthP = Math.max(8, ((day.maxTemp - day.minTemp) / tempSpan) * 100);
-              return (
-                <div key={day.date || idx} className="forecast-day-row">
-                  <div>
-                    <div className="forecast-day-row__name">{idx === 0 ? 'Today' : fmtDay(day.date)}</div>
-                    <div className="forecast-day-row__date">{fmtDateShort(day.date)}</div>
-                  </div>
-                  <div className="forecast-day-row__icon">
-                    <WeatherIcon icon={day.icon} size={22} />
-                  </div>
-                  <div className="forecast-day-row__bar">
-                    <div
-                      className="forecast-day-row__bar-fill"
-                      style={{ left: `${Math.max(0, minP)}%`, width: `${Math.min(100 - minP, widthP)}%` }}
-                    />
-                  </div>
-                  <div className="forecast-day-row__temps">
-                    <span className="forecast-day-row__high">{Math.round(day.maxTemp)}°</span>
-                    <span className="forecast-day-row__low">{Math.round(day.minTemp)}°</span>
-                  </div>
-                  <div className="forecast-day-row__rain">
-                    <Droplets size={12} color="#38bdf8" style={{ verticalAlign: 'middle', marginRight: 2 }} />
-                    {day.rainProbability ?? 0}%
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
+      {/* Modern Wave Forecast Section: Today, Hourly & 15-Day Daily Forecast */}
+      {forecast && (
+        <WaveForecastCard forecast={forecast} current={current} />
       )}
 
       {/* AI Weather Insights */}
@@ -450,7 +365,7 @@ export default function ForecastPage({ location, onBackToChat }) {
         <section className="forecast-insights" aria-label="AI Weather Insights">
           <h3 className="forecast-section-title">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
             </svg>
             <span>Weather Intelligence & Advisory</span>
           </h3>

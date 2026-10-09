@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import InteractiveEarth from './InteractiveEarth.jsx';
 import WeatherIcon from './WeatherIcon.jsx';
 import {
   CloudSunRain,
@@ -15,7 +16,7 @@ import {
 
 const QUICK_PROMPTS = [
   { icon: CloudSunRain, color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.15)', text: "What's the current weather in my city?" },
-  { icon: Calendar, color: '#818cf8', bg: 'rgba(129, 140, 248, 0.15)', text: 'Show me the 7-day IMD forecast' },
+  { icon: Calendar, color: '#818cf8', bg: 'rgba(129, 140, 248, 0.15)', text: 'Show me the 15-day IMD forecast' },
   { icon: Wheat, color: '#eab308', bg: 'rgba(234, 179, 8, 0.15)', text: "How will today's weather affect crops?" },
   { icon: CloudRain, color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.15)', text: 'Will it rain today?' },
   { icon: Globe, color: '#06b6d4', bg: 'rgba(6, 182, 212, 0.15)', text: 'Recent earthquakes near India?' },
@@ -154,7 +155,7 @@ function HourlyForecastStrip({ location, onNavigateForecast }) {
               gap: '4px'
             }}
           >
-            Full 7-Day Forecast →
+            15-Day Weather Forecast →
           </button>
         )}
       </div>
@@ -281,18 +282,8 @@ export default function HomePage({ weather, location, onPromptClick, currentLang
             })}
           </div>
         </div>
-        <div className="hero__visual" aria-hidden="true">
-          <div className="earth-visual">
-            <div className="earth-visual__globe">
-              <div className="earth-visual__atmosphere" />
-              <div className="earth-visual__surface" />
-              <div className="earth-visual__clouds" />
-              <div className="earth-visual__glow" />
-            </div>
-            <div className="earth-visual__tagline">
-              Smarter Weather<br />Brighter Tomorrow
-            </div>
-          </div>
+        <div className="hero__visual">
+          <InteractiveEarth location={location} weather={weather} />
         </div>
       </section>
 
