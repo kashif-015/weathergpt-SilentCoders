@@ -4276,9 +4276,10 @@ body {
   cursor: pointer;
 }
 
-.agri-refresh:disabled {
-  opacity: .55;
-  cursor: not-allowed;
+.agri-back-btn:hover {
+  background: rgba(255, 255, 255, 0.16) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+  transform: translateX(-2px);
 }
 
 .agri-spin {

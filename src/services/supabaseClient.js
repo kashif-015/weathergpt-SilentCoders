@@ -242,11 +242,21 @@ export async function getCurrentUserProfile() {
     if (session?.user) {
       const user = session.user;
       const meta = user.user_metadata || {};
+      const pendingOccupation = typeof localStorage !== 'undefined' ? localStorage.getItem('weathergpt_pending_oauth_occupation') : null;
+      const finalOccupation = pendingOccupation || meta.occupation || getLocalProfile()?.occupation || null;
+
+      if (pendingOccupation) {
+        localStorage.removeItem('weathergpt_pending_oauth_occupation');
+        try {
+          supabase.auth.updateUser({ data: { occupation: pendingOccupation } });
+        } catch (e) {}
+      }
+
       const profileData = {
         id: user.id,
         email: user.email,
         name: meta.full_name || meta.name || user.email?.split('@')[0] || 'User',
-        occupation: meta.occupation || 'Farmer',
+        occupation: finalOccupation,
         language: meta.language || 'hi',
         age: meta.age || null,
       };
@@ -265,11 +275,21 @@ export function observeAuthState(callback) {
     if (session?.user) {
       const user = session.user;
       const meta = user.user_metadata || {};
+      const pendingOccupation = typeof localStorage !== 'undefined' ? localStorage.getItem('weathergpt_pending_oauth_occupation') : null;
+      const finalOccupation = pendingOccupation || meta.occupation || getLocalProfile()?.occupation || null;
+
+      if (pendingOccupation) {
+        localStorage.removeItem('weathergpt_pending_oauth_occupation');
+        try {
+          supabase.auth.updateUser({ data: { occupation: pendingOccupation } });
+        } catch (e) {}
+      }
+
       const profile = {
         id: user.id,
         email: user.email,
         name: meta.full_name || meta.name || user.email?.split('@')[0] || 'User',
-        occupation: meta.occupation || 'Farmer',
+        occupation: finalOccupation,
         language: meta.language || 'hi',
         age: meta.age || null,
       };
@@ -293,11 +313,21 @@ export function observeAuthState(callback) {
     } else if (session?.user) {
       const user = session.user;
       const meta = user.user_metadata || {};
+      const pendingOccupation = typeof localStorage !== 'undefined' ? localStorage.getItem('weathergpt_pending_oauth_occupation') : null;
+      const finalOccupation = pendingOccupation || meta.occupation || getLocalProfile()?.occupation || null;
+
+      if (pendingOccupation) {
+        localStorage.removeItem('weathergpt_pending_oauth_occupation');
+        try {
+          supabase.auth.updateUser({ data: { occupation: pendingOccupation } });
+        } catch (e) {}
+      }
+
       const profile = {
         id: user.id,
         email: user.email,
         name: meta.full_name || meta.name || user.email?.split('@')[0] || 'User',
-        occupation: meta.occupation || 'Farmer',
+        occupation: finalOccupation,
         language: meta.language || 'hi',
         age: meta.age || null,
       };

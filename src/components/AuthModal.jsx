@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { signInWithEmail, signUpWithEmail, signInWithGoogle, resendConfirmationEmail } from '../services/supabaseClient.js';
+import { signInWithEmail, signUpWithEmail, signInWithGoogle, resendConfirmationEmail } from '../services/firebaseClient.js';
 import { getTranslation } from '../services/translations.js';
-import { CloudSun, AlertTriangle, CheckCircle2, X, MailCheck, RefreshCw } from 'lucide-react';
+import { CloudSun, AlertTriangle, CheckCircle2, X, MailCheck, RefreshCw, Briefcase } from 'lucide-react';
 import weatherGPTLogo from '../assets/weatherGPT_logo.png';
 
 export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang, setAppLanguage }) {
@@ -20,6 +20,8 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
   const [resendLoading, setResendLoading] = useState(false);
   const [resendSuccess, setResendSuccess] = useState('');
   const [showResendForLogin, setShowResendForLogin] = useState(false);
+  const [googleStep, setGoogleStep] = useState('initial'); // 'initial' | 'choose_profession'
+  const [googleProfession, setGoogleProfession] = useState('Farmer');
 
   useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -38,12 +40,17 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
     setAppLanguage(langCode);
   };
 
-  const handleGoogleSignIn = async () => {
+  const handleProceedWithGoogle = async () => {
     try {
       setLoading(true);
       setErrorMsg('');
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('weathergpt_pending_oauth_occupation', googleProfession);
+        localStorage.setItem('weathergpt_pending_oauth_language', language);
+      }
       const result = await signInWithGoogle();
       if (result?.profile) {
+        result.profile.occupation = googleProfession;
         onAuthSuccess(result.profile);
         onClose();
       }
@@ -261,6 +268,122 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
               </button>
             </div>
           </div>
+        ) : googleStep === 'choose_profession' ? (
+          <div className="auth-google-profession-step" style={{ padding: '6px 0' }}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <div style={{
+                width: 52,
+                height: 52,
+                borderRadius: '50%',
+                background: 'rgba(56, 189, 248, 0.15)',
+                border: '2px solid rgba(56, 189, 248, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 10px',
+                color: '#38bdf8'
+              }}>
+                <Briefcase size={26} />
+              </div>
+              <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: '0 0 6px' }}>
+                {language === 'hi' ? 'अपना व्यवसाय चुनें' : 'Choose Your Profession'}
+              </h3>
+              <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
+                {language === 'hi'
+                  ? 'Google से साइन इन करने से पहले अपना पेशा चुनें'
+                  : 'Select your profession before continuing with Google'}
+              </p>
+            </div>
+
+            {/* Profession Options */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '18px' }}>
+              {[
+                { id: 'Farmer', icon: '🌾', en: 'Farmer / Agricultural Worker', hi: 'किसान (कृषि परामर्श विशेष पहुंच)', isHighlight: true },
+                { id: 'Student', icon: '🎓', en: 'Student / Learner', hi: 'विद्यार्थी / छात्र' },
+                { id: 'Software Tech', icon: '💻', en: 'Software / Tech Professional', hi: 'सॉफ्टवेयर / तकनीकी पेशेवर' },
+                { id: 'Business', icon: '💼', en: 'Business / Entrepreneur', hi: 'व्यापारी / उद्यमी' },
+                { id: 'Weather Researcher', icon: '🔬', en: 'Weather Researcher / Scientist', hi: 'मौसम शोधकर्ता / वैज्ञानिक' },
+                { id: 'Government Servant', icon: '🏛️', en: 'Government / Public Servant', hi: 'सरकारी कर्मचारी' },
+                { id: 'Other', icon: '🌐', en: 'Other', hi: 'अन्य' },
+              ].map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setGoogleProfession(p.id)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '10px 14px',
+                    borderRadius: '10px',
+                    border: googleProfession === p.id
+                      ? '2px solid #38bdf8'
+                      : p.isHighlight
+                      ? '1px solid rgba(52, 211, 153, 0.35)'
+                      : '1px solid rgba(255, 255, 255, 0.12)',
+                    background: googleProfession === p.id
+                      ? 'rgba(56, 189, 248, 0.15)'
+                      : p.isHighlight
+                      ? 'rgba(16, 185, 129, 0.08)'
+                      : 'rgba(255, 255, 255, 0.04)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  <span style={{ fontSize: '18px' }}>{p.icon}</span>
+                  <div style={{ flex: 1 }}>
+                    <strong style={{ fontSize: '13px', display: 'block', color: googleProfession === p.id ? '#38bdf8' : '#fff' }}>
+                      {language === 'hi' ? p.hi : p.en}
+                    </strong>
+                  </div>
+                  {googleProfession === p.id && (
+                    <CheckCircle2 size={18} style={{ color: '#38bdf8' }} />
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {errorMsg && (
+              <div className="auth-alert auth-alert--error" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+                <AlertTriangle size={16} /> {errorMsg}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                type="button"
+                className="auth-submit-btn"
+                disabled={loading}
+                onClick={handleProceedWithGoogle}
+              >
+                {loading ? (
+                  language === 'hi' ? 'कृपया प्रतीक्षा करें...' : 'Connecting to Google...'
+                ) : (
+                  language === 'hi'
+                    ? `Google से साइन इन करें (${googleProfession === 'Farmer' ? 'किसान' : googleProfession}) →`
+                    : `Sign in with Google as ${googleProfession} →`
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setGoogleStep('initial')}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  padding: '6px'
+                }}
+              >
+                ← {language === 'hi' ? 'वापस जाएं (Back)' : 'Back to Login Options'}
+              </button>
+            </div>
+          </div>
         ) : (
           <>
             {/* Auth Tabs */}
@@ -280,7 +403,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
             </div>
 
             {/* Google Auth Button */}
-            <button className="google-auth-btn" onClick={handleGoogleSignIn} disabled={loading}>
+            <button className="google-auth-btn" onClick={() => setGoogleStep('choose_profession')} disabled={loading}>
               <svg className="google-icon" viewBox="0 0 24 24" width="18" height="18">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                 <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />

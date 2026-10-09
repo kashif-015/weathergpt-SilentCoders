@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { updateUserProfile } from '../services/supabaseClient.js';
+import { updateUserProfile } from '../services/firebaseClient.js';
 import { getTranslation } from '../services/translations.js';
 import { X, CheckCircle2, Briefcase, Cake, Globe, Bot, Edit3, LogOut } from 'lucide-react';
 

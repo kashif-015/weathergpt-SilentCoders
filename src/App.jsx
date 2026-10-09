@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getCurrentWeather, getForecast, getUserLocation, reverseGeocode, getStoredLocation, onLocationPermissionChange, geocodeCity } from './services/weatherService.js';
 import { processQuery } from './services/chatEngine.js';
-import { getCurrentUserProfile, signOutUser, observeAuthState } from './services/supabaseClient.js';
+import { getCurrentUserProfile, signOutUser, observeAuthState, updateUserProfile } from './services/firebaseClient.js';
 import { getTranslation } from './services/translations.js';
 import appMetadata from '../package.json';
 import { speakSarvamText } from './services/voiceService.js';
@@ -358,7 +358,9 @@ function Sidebar({
 
         {/* Primary Navigation */}
         <nav className="sidebar__nav" aria-label="Main navigation">
-          {PRIMARY_NAV_ITEMS.map(item => (
+          {PRIMARY_NAV_ITEMS
+            .filter(item => item.id !== 'agriculture' || userProfile?.occupation === 'Farmer')
+            .map(item => (
             <button
               key={item.id}
               className={`sidebar__nav-item ${activePage === item.id ? 'sidebar__nav-item--active' : ''}`}
@@ -1100,6 +1102,16 @@ export default function App() {
     setShowAuthModal(true);
   };
 
+  const handleBecomeFarmer = async () => {
+    const updated = { ...(userProfile || {}), occupation: 'Farmer' };
+    setUserProfile(updated);
+    try {
+      await updateUserProfile({ occupation: 'Farmer' });
+    } catch (e) {
+      console.warn('Failed to update occupation to Farmer:', e);
+    }
+  };
+
   const handleNewChat = () => {
     const conv = createConversation(currentLang);
     setConversations(loadAllConversations());
@@ -1519,8 +1531,99 @@ export default function App() {
       case 'maps':
         return <WeatherMap location={location} onBack={() => handleNavigate('home')} onOpenDistrictWarning={(alert) => { setSelectedDistrictAlert(alert); setActivePage('alerts'); }} />;
 
-      case 'agriculture':
-        return <AgricultureAdvisory location={location} />;
+      case 'agriculture': {
+        const isFarmer = userProfile?.occupation === 'Farmer';
+        if (!isFarmer) {
+          return (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: '65vh',
+              textAlign: 'center',
+              padding: '32px 20px',
+              maxWidth: '620px',
+              margin: '40px auto 0',
+              background: 'var(--bg-card, #111827)',
+              borderRadius: '20px',
+              border: '1px solid rgba(132, 204, 22, 0.3)',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.4)'
+            }}>
+              <div style={{
+                width: '76px',
+                height: '76px',
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, rgba(132, 204, 22, 0.25), rgba(16, 185, 129, 0.2))',
+                border: '2px solid rgba(132, 204, 22, 0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '36px',
+                marginBottom: '18px',
+                boxShadow: '0 8px 30px rgba(132, 204, 22, 0.25)'
+              }}>
+                🌾
+              </div>
+              <h2 style={{ fontSize: '24px', fontWeight: '800', color: 'var(--text-primary)', marginBottom: '8px' }}>
+                {currentLang === 'hi' ? 'केवल पंजीकृत किसानों के लिए' : 'Farmer Exclusive Portal'}
+              </h2>
+              <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.6', marginBottom: '24px', maxWidth: '480px' }}>
+                {currentLang === 'hi'
+                  ? 'यह विशेष क्रॉप एडवाइजरी व मौसम मार्गदर्शन पृष्ठ केवल किसान (Farmer) के रूप में पंजीकृत उपयोगकर्ताओं के लिए सुरक्षित है।'
+                  : 'This specialized Crop Advisory portal is exclusively crafted for registered Farmers to receive actionable agromet weather guidance.'}
+              </p>
+              
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <button
+                  onClick={handleBecomeFarmer}
+                  style={{
+                    padding: '12px 22px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, #16a34a, #22c55e)',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: '700',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    boxShadow: '0 4px 16px rgba(34, 197, 94, 0.3)'
+                  }}
+                >
+                  🌾 {currentLang === 'hi' ? 'किसान प्रोफेशन सेट करें' : 'Switch Profession to Farmer'}
+                </button>
+                <button
+                  onClick={() => handleNavigate('home')}
+                  style={{
+                    padding: '12px 22px',
+                    borderRadius: '12px',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)',
+                    fontWeight: '600',
+                    fontSize: '14px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {currentLang === 'hi' ? 'मुख्य पृष्ठ पर लौटें' : 'Back to Dashboard'}
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <AgricultureAdvisory
+            location={location}
+            currentLang={currentLang}
+            userProfile={userProfile}
+            onBack={() => handleNavigate('home')}
+            onNavigateChat={() => handleNavigate('chat')}
+          />
+        );
+      }
 
       case 'climate':
         return <ClimateInsights location={location} />;
