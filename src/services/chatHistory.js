@@ -169,7 +169,7 @@ export function clearAllHistory() {
   } catch {}
 }
 
-/** Fetches a Firebase user's conversation records from Supabase and refreshes
+/** Fetches a user's conversation records from Supabase and refreshes
  * the local offline cache. A network/database failure deliberately leaves the
  * local cache untouched. */
 export async function hydrateConversationsFromSupabase(userEmail) {

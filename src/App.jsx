@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getCurrentWeather, getForecast, getUserLocation, reverseGeocode, getStoredLocation, onLocationPermissionChange, geocodeCity } from './services/weatherService.js';
 import { processQuery } from './services/chatEngine.js';
-import { getCurrentUserProfile, signOutUser, observeAuthState } from './services/firebaseClient.js';
+import { getCurrentUserProfile, signOutUser, observeAuthState } from './services/supabaseClient.js';
 import { getTranslation } from './services/translations.js';
 import appMetadata from '../package.json';
 import { speakSarvamText } from './services/voiceService.js';

@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://oauezictifhjcfttwqhh.supabase.co';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hdWV6aWN0aWZoamNmdHR3cWhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4ODY4NTMsImV4cCI6MjEwMzQ2Mjg1M30.n4FErIUKvFku40idE6mVh5iLNuUlYHVe5kKuS_OCvN8';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://iujimmoonhfgooryhgvd.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1amltbW9vbmhmZ29vcnloZ3ZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1MTk4MTYsImV4cCI6MjEwNzA5NTgxNn0.UDffJy5aKdWIK7J-3eFVkPKIGf1_2kgnqFZ2Gsnk4Dw';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
@@ -63,8 +63,53 @@ export async function signUpWithEmail({ email, password, name, occupation, langu
     age: age ? parseInt(age, 10) : null,
   };
 
+  const redirectUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5174';
+
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: metadata,
+      emailRedirectTo: redirectUrl,
+    },
+  });
+
+  if (error) {
+    if (error.message?.includes('already registered') || error.status === 422) {
+      throw new Error(
+        language === 'hi'
+          ? 'यह ईमेल पहले से पंजीकृत है। कृपया लॉगिन करें।'
+          : 'This email is already registered. Please sign in.'
+      );
+    }
+    if (error.code === 'over_email_send_rate_limit' || error.message?.includes('rate limit')) {
+      throw new Error(
+        language === 'hi'
+          ? 'ईमेल भेजने की सीमा पार हो गई है (Supabase 3-4 ईमेल प्रति घंटा अनुमति देता है)। कृपया 5-10 मिनट बाद प्रयास करें या Google से लॉगिन करें।'
+          : 'Email send rate limit reached (Supabase limit is ~3-4 emails/hr). Please wait a few minutes, check Spam, or sign in with Google.'
+      );
+    }
+    if (error.message?.includes('invalid')) {
+      throw new Error(
+        language === 'hi'
+          ? 'अमान्य ईमेल पता। कृपया एक असली ईमेल पता (जैसे Gmail) दर्ज करें।'
+          : 'Invalid email address. Please use a valid real email provider (e.g. Gmail).'
+      );
+    }
+    throw error;
+  }
+
+  // If user already exists, Supabase returns identities: [] to prevent email enumeration
+  if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    throw new Error(
+      language === 'hi'
+        ? 'यह ईमेल पहले से पंजीकृत है। कृपया लॉगिन करें।'
+        : 'This email is already registered. Please sign in instead.'
+    );
+  }
+
   const profileData = {
-    id: 'user_' + Date.now(),
+    id: data?.user?.id || 'user_' + Date.now(),
     email,
     name,
     occupation: occupation || 'Farmer',
@@ -72,51 +117,43 @@ export async function signUpWithEmail({ email, password, name, occupation, langu
     age: age ? parseInt(age, 10) : null,
   };
 
-  try {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: metadata,
-      },
-    });
+  // If email confirmation is enabled in Supabase, session will be null until user clicks the link
+  const verificationRequired = !data?.session;
 
-    if (error) {
-      // If user is already registered, try signing in directly!
-      if (error.message?.includes('already registered') || error.status === 422) {
-        return await signInWithEmail({ email, password });
-      }
-      // If rate limited or other error, save local profile and proceed to log in user locally!
-      console.warn('Supabase auth sign up warning:', error.message);
-    }
-
-    if (data?.user?.id) {
-      profileData.id = data.user.id;
-    }
-
-    // Try optional table insert if allowed
-    if (data?.user?.id) {
-      try {
-        await supabase.from('profiles').upsert({
-          id: data.user.id,
-          full_name: name,
-          occupation,
-          language,
-          age: age ? parseInt(age, 10) : null,
-          updated_at: new Date().toISOString(),
-        });
-      } catch (e) {}
-    }
-  } catch (err) {
-    console.warn('SignUp exception, activating local session:', err);
+  if (!verificationRequired) {
+    saveLocalProfile(profileData);
   }
 
-  saveLocalProfile(profileData);
-  return { profile: profileData };
+  return {
+    user: data?.user,
+    session: data?.session,
+    profile: profileData,
+    verificationRequired,
+  };
+}
+
+// 2b. Resend Confirmation Email
+export async function resendConfirmationEmail(email) {
+  const redirectUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5174';
+  const { data, error } = await supabase.auth.resend({
+    type: 'signup',
+    email,
+    options: {
+      emailRedirectTo: redirectUrl,
+    },
+  });
+
+  if (error) {
+    if (error.code === 'over_email_send_rate_limit' || error.message?.includes('rate limit')) {
+      throw new Error('Rate limit reached: Please wait 60 seconds before requesting another email.');
+    }
+    throw error;
+  }
+  return data;
 }
 
 // 3. Email & Password Sign In
-export async function signInWithEmail({ email, password }) {
+export async function signInWithEmail({ email, password, language = 'en' }) {
   const profileData = {
     email,
     name: email.split('@')[0],
@@ -132,10 +169,19 @@ export async function signInWithEmail({ email, password }) {
     });
 
     if (error) {
-      // Check if user is cached locally
-      const local = getLocalProfile();
-      if (local && local.email?.toLowerCase() === email.toLowerCase()) {
-        return { profile: local };
+      if (error.message?.includes('Email not confirmed') || error.code === 'email_not_confirmed') {
+        throw new Error(
+          language === 'hi'
+            ? 'आपका ईमेल अभी सत्यापित नहीं हुआ है! कृपया अपने इनबॉक्स और स्पैम फ़ोल्डर में पुष्टिकरण लिंक जांचें।'
+            : 'Your email is not verified yet! Please check your inbox and Spam folder for the confirmation link.'
+        );
+      }
+      if (error.message?.includes('Invalid login credentials')) {
+        throw new Error(
+          language === 'hi'
+            ? 'गलत ईमेल या पासवर्ड। कृपया पुनः प्रयास करें।'
+            : 'Invalid email or password. Please try again.'
+        );
       }
       throw error;
     }
@@ -150,10 +196,6 @@ export async function signInWithEmail({ email, password }) {
     saveLocalProfile(profileData);
     return { user: data.user, session: data.session, profile: profileData };
   } catch (err) {
-    const local = getLocalProfile();
-    if (local && local.email?.toLowerCase() === email.toLowerCase()) {
-      return { profile: local };
-    }
     throw err;
   }
 }
@@ -214,4 +256,58 @@ export async function getCurrentUserProfile() {
   } catch (e) {}
 
   return getLocalProfile();
+}
+
+// 7. Observe Auth State Changes (replaces Firebase onAuthStateChanged)
+export function observeAuthState(callback) {
+  // Check existing session first
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session?.user) {
+      const user = session.user;
+      const meta = user.user_metadata || {};
+      const profile = {
+        id: user.id,
+        email: user.email,
+        name: meta.full_name || meta.name || user.email?.split('@')[0] || 'User',
+        occupation: meta.occupation || 'Farmer',
+        language: meta.language || 'hi',
+        age: meta.age || null,
+      };
+      saveLocalProfile(profile);
+      callback(profile);
+    } else {
+      // Check local profile as fallback
+      const local = getLocalProfile();
+      callback(local && local.id ? local : null);
+    }
+  }).catch(() => {
+    const local = getLocalProfile();
+    callback(local && local.id ? local : null);
+  });
+
+  // Listen for future auth changes (sign in, sign out, token refresh)
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT') {
+      clearLocalProfile();
+      callback(null);
+    } else if (session?.user) {
+      const user = session.user;
+      const meta = user.user_metadata || {};
+      const profile = {
+        id: user.id,
+        email: user.email,
+        name: meta.full_name || meta.name || user.email?.split('@')[0] || 'User',
+        occupation: meta.occupation || 'Farmer',
+        language: meta.language || 'hi',
+        age: meta.age || null,
+      };
+      saveLocalProfile(profile);
+      callback(profile);
+    }
+  });
+
+  // Return unsubscribe function (same API as Firebase's onAuthStateChanged)
+  return () => {
+    subscription.unsubscribe();
+  };
 }

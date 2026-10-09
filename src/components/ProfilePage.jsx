@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Check, Globe2, LogOut, Mail, MapPin, Pencil, UserRound, Wheat } from 'lucide-react';
 import { getTranslation } from '../services/translations.js';
-import { updateUserProfile } from '../services/firebaseClient.js';
+import { updateUserProfile } from '../services/supabaseClient.js';
 import weatherGPTLogo from '../assets/weatherGPT_logo.png';
 
 export default function ProfilePage({ userProfile, location, onProfileUpdate, currentLang, setAppLanguage, onBackToChat, onLogout }) {
