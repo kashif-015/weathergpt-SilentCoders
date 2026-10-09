@@ -12,6 +12,7 @@ import {
 import {
   createEmptyContext,
   resolveFollowUpIntent,
+  analyzeQueryIntent,
   mergeConversationContext,
   getCurrentDateForTimezone,
 } from './contextEngine.js';
@@ -198,18 +199,64 @@ export async function processConversationTurn({
     }
   }
 
-  // 3. Resolve follow-up intent from context
-  const { handled, updates: followUpUpdates } = resolveFollowUpIntent(cleanMessage, currentContext);
-  if (handled && Object.keys(followUpUpdates).length > 0) {
-    currentContext = mergeConversationContext(currentContext, followUpUpdates);
-  }
-
-  // 4. Construct System Instructions
+  // 3. Resolve follow-up intent from context and historical requests (Requirements 1, 3, 7, 8)
   const targetTz = currentContext?.location?.timezone || 'Asia/Kolkata';
   const currentDateStr = getCurrentDateForTimezone(targetTz);
 
+  const lastUserMsg = messageHistory.filter(m => m.role === 'user').slice(-1)[0]?.content || null;
+  const lastAssistantMsg = messageHistory.filter(m => m.role === 'assistant').slice(-1)[0]?.content || null;
+
+  const followUpRes = resolveFollowUpIntent(cleanMessage, currentContext, {
+    lastUserMessage: lastUserMsg,
+    lastAssistantMessage: lastAssistantMsg,
+    messageHistory,
+  });
+
+  // Requirement 8: Ask clarification if relative date cannot be resolved confidently
+  if (followUpRes.needs_clarification) {
+    const clarificationText = userLang === 'hi'
+      ? 'कृपया स्पष्ट करें कि आप किस तारीख और स्थान के लिए मौसम की जानकारी देखना चाहते हैं।'
+      : (followUpRes.clarification_question || 'Could you please specify which date and location you would like to check?');
+
+    let finalConvId = activeConvId;
+    if (!finalConvId) {
+      const autoTitle = generateConversationTitle(cleanMessage, userLang);
+      const { data: newConv } = await supabaseAdmin.from('conversations').insert({
+        user_id: userId,
+        title: autoTitle,
+        context: currentContext,
+      }).select('id').single();
+      finalConvId = newConv?.id;
+    }
+
+    if (finalConvId) {
+      await supabaseAdmin.from('messages').insert([
+        { conversation_id: finalConvId, role: 'user', content: cleanMessage, metadata: { timestamp: new Date().toISOString() } },
+        { conversation_id: finalConvId, role: 'assistant', content: clarificationText, metadata: { timestamp: new Date().toISOString() } },
+      ]);
+    }
+
+    return {
+      conversationId: finalConvId,
+      message: { role: 'assistant', content: clarificationText, metadata: { timestamp: new Date().toISOString() } },
+      context: currentContext,
+    };
+  }
+
+  if (followUpRes.handled && Object.keys(followUpRes.updates).length > 0) {
+    currentContext = mergeConversationContext(currentContext, followUpRes.updates);
+  } else {
+    // If not a relative follow-up, parse explicit date/location/intent from new query (Turn 1 or new topic)
+    const initAnalysis = analyzeQueryIntent(cleanMessage, currentDateStr, currentContext?.location || location);
+    currentContext = mergeConversationContext(currentContext, initAnalysis);
+  }
+
+  // 4. Construct System Instructions
+  const activeTz = currentContext?.location?.timezone || targetTz;
+  const activeDateStr = getCurrentDateForTimezone(activeTz);
+
   const systemInstruction = `You are WeatherGPT, a conversational AI weather assistant.
-Today's Date: ${currentDateStr} (Timezone: ${targetTz}).
+Today's Date: ${activeDateStr} (Timezone: ${activeTz}).
 
 CURRENT ACTIVE CONTEXT:
 ${JSON.stringify(currentContext, null, 2)}
@@ -282,26 +329,37 @@ RULES & INSTRUCTIONS:
           }
           toolResults.push({ tool: fnName, result: execResult });
 
-          // Update structured context based on tool execution
+          // Update structured context based on tool execution (Requirement 2)
           if (execResult && !execResult.error) {
-            const contextUpdates = {};
+            const contextUpdates = {
+              last_successful_tool: fnName,
+            };
             if (execResult.location) contextUpdates.location = execResult.location;
             if (fnName === 'get_current_weather') {
               contextUpdates.intent = 'get_current_weather';
               contextUpdates.topic = 'current_weather';
+              contextUpdates.data_mode = 'current';
               contextUpdates.last_weather_source = execResult.source;
             } else if (fnName === 'get_weather_forecast') {
               contextUpdates.intent = 'get_weather_forecast';
               contextUpdates.topic = 'weather_forecast';
+              contextUpdates.data_mode = 'forecast';
               contextUpdates.last_weather_source = execResult.source;
+              if (execResult.date_range) {
+                contextUpdates.date_range = execResult.date_range;
+                contextUpdates.resolved_date = execResult.date_range.start;
+              }
             } else if (fnName === 'get_historical_weather') {
               contextUpdates.intent = 'get_historical_weather';
               contextUpdates.topic = 'historical_weather';
+              contextUpdates.data_mode = 'historical_observation';
               contextUpdates.date_range = execResult.date_range;
+              contextUpdates.resolved_date = execResult.date_range?.start || fnArgs?.date;
               contextUpdates.last_weather_source = execResult.source;
             } else if (fnName === 'get_weather_alerts') {
               contextUpdates.intent = 'get_weather_alerts';
               contextUpdates.topic = 'weather_alerts';
+              contextUpdates.data_mode = 'current';
               contextUpdates.last_alerts = execResult.alerts;
             }
             currentContext = mergeConversationContext(currentContext, contextUpdates);
@@ -356,22 +414,41 @@ RULES & INSTRUCTIONS:
   if (!llmSuccess || !responseText) {
     console.log('[ConversationManager] Engaging resilient fallback pipeline...');
 
-    // Attempt direct tool execution based on resolved context
+    // Attempt direct tool execution based on resolved context (Requirements 2, 4, 5)
     let fallbackData = null;
     try {
       const loc = currentContext?.location?.name || location?.name || 'Bhilai';
-      if (currentContext?.intent === 'get_historical_weather' && currentContext?.date_range?.start) {
+      const targetDate = currentContext?.resolved_date || currentContext?.date_range?.start;
+
+      if ((currentContext?.data_mode === 'historical_observation' || currentContext?.intent === 'get_historical_weather') && targetDate) {
         fallbackData = await executeWeatherTool('get_historical_weather', {
           location: loc,
-          date: currentContext.date_range.start,
+          date: targetDate,
         });
         toolsUsed.push('get_historical_weather');
-      } else if (currentContext?.intent === 'get_weather_forecast') {
+        currentContext = mergeConversationContext(currentContext, {
+          last_successful_tool: 'get_historical_weather',
+          data_mode: 'historical_observation',
+          resolved_date: targetDate,
+          date_range: { start: targetDate, end: targetDate },
+          last_weather_source: fallbackData?.source,
+        });
+      } else if (currentContext?.data_mode === 'forecast' || currentContext?.intent === 'get_weather_forecast') {
         fallbackData = await executeWeatherTool('get_weather_forecast', { location: loc, days: 7 });
         toolsUsed.push('get_weather_forecast');
+        currentContext = mergeConversationContext(currentContext, {
+          last_successful_tool: 'get_weather_forecast',
+          data_mode: 'forecast',
+          last_weather_source: fallbackData?.source,
+        });
       } else {
         fallbackData = await executeWeatherTool('get_current_weather', { location: loc });
         toolsUsed.push('get_current_weather');
+        currentContext = mergeConversationContext(currentContext, {
+          last_successful_tool: 'get_current_weather',
+          data_mode: 'current',
+          last_weather_source: fallbackData?.source,
+        });
       }
       toolResults.push({ tool: toolsUsed[0], result: fallbackData });
     } catch (e) {
@@ -411,15 +488,27 @@ RULES & INSTRUCTIONS:
 
     // If still no response, synthesize verified text directly from data
     if (!responseText) {
-      if (fallbackData?.temperature !== undefined) {
+      if (fallbackData?.observations?.[0]) {
+        const obs = fallbackData.observations[0];
+        const isRainQuery = (currentContext?.weather_variables || []).includes('precipitation');
+        if (isRainQuery) {
+          responseText = userLang === 'hi'
+            ? `${fallbackData.location?.name} में ${obs.date} को ${obs.did_rain ? `${obs.precipitation} मिमी बारिश दर्ज की गई थी` : 'बारिश दर्ज नहीं की गई थी (0 मिमी)'}।`
+            : `In ${fallbackData.location?.name} on ${obs.date}, ${obs.did_rain ? `${obs.precipitation} mm of rainfall was recorded` : 'no rainfall was recorded (0 mm)'}.`;
+        } else {
+          responseText = userLang === 'hi'
+            ? `${fallbackData.location?.name} में ${obs.date} को ${obs.did_rain ? `बारिश हुई थी (${obs.precipitation} मिमी)` : 'बारिश नहीं हुई थी'}। अधिकतम तापमान ${obs.temperature?.max}°C दर्ज किया गया।`
+            : `In ${fallbackData.location?.name} on ${obs.date}, ${obs.did_rain ? `it rained (${obs.precipitation} mm)` : 'no rain was recorded'}. Maximum temperature reached ${obs.temperature?.max}°C.`;
+        }
+      } else if (fallbackData?.days?.[0]) {
+        const firstDay = fallbackData.days[0];
+        responseText = userLang === 'hi'
+          ? `${fallbackData.location?.name} के लिए पूर्वानुमान: तापमान ${firstDay.temp_max}°C / ${firstDay.temp_min}°C, ${firstDay.condition}।`
+          : `Forecast for ${fallbackData.location?.name}: High of ${firstDay.temp_max}°C, low of ${firstDay.temp_min}°C with ${firstDay.condition}.`;
+      } else if (fallbackData?.temperature !== undefined) {
         responseText = userLang === 'hi'
           ? `${fallbackData.location?.name} में वर्तमान तापमान ${fallbackData.temperature}°C है (${fallbackData.condition})। आर्द्रता ${fallbackData.humidity}% और हवा की गति ${fallbackData.wind_speed} किमी/घंटा है।`
           : `In ${fallbackData.location?.name}, the current temperature is ${fallbackData.temperature}°C with ${fallbackData.condition}. Humidity is ${fallbackData.humidity}% and wind speed is ${fallbackData.wind_speed} km/h.`;
-      } else if (fallbackData?.observations?.[0]) {
-        const obs = fallbackData.observations[0];
-        responseText = userLang === 'hi'
-          ? `${fallbackData.location?.name} में ${obs.date} को ${obs.did_rain ? `बारिश हुई थी (${obs.precipitation} मिमी)` : 'बारिश नहीं हुई थी'}। अधिकतम तापमान ${obs.temperature?.max}°C दर्ज किया गया।`
-          : `In ${fallbackData.location?.name} on ${obs.date}, ${obs.did_rain ? `it rained (${obs.precipitation} mm)` : 'no rain was recorded'}. Maximum temperature reached ${obs.temperature?.max}°C.`;
       } else {
         responseText = userLang === 'hi'
           ? 'मौसम डेटा प्राप्त हो गया है। आप किसी भी विशिष्ट शहर या तारीख के बारे में पूछ सकते हैं।'
