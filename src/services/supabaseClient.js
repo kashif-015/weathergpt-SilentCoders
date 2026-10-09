@@ -341,3 +341,16 @@ export function observeAuthState(callback) {
     subscription.unsubscribe();
   };
 }
+
+/**
+ * Returns active user JWT token for authenticated API requests
+ */
+export async function getAuthToken() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  } catch {
+    return null;
+  }
+}
+

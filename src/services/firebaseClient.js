@@ -4,6 +4,7 @@ import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
   getAuth,
+  getIdToken,
   onAuthStateChanged,
   sendEmailVerification,
   signInWithEmailAndPassword,
@@ -449,4 +450,19 @@ export function observeAuthState(callback) {
   return () => {
     localListeners.delete(callback);
   };
+}
+
+/**
+ * Returns the current Firebase user's JWT ID token for authenticated server requests.
+ * Falls back to null if user is not signed in or Firebase is not configured.
+ */
+export async function getFirebaseAuthToken() {
+  if (!firebaseAuth) return null;
+  try {
+    const user = firebaseAuth.currentUser;
+    if (!user) return null;
+    return await getIdToken(user, /* forceRefresh */ false);
+  } catch {
+    return null;
+  }
 }

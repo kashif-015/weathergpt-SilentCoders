@@ -24,6 +24,7 @@ import {
   routeWeatherQuery,
   alertDispatcher,
 } from './apiClients.js';
+import { getFirebaseAuthToken } from './firebaseClient.js';
 
 // Intent matchers
 const INTENTS = [
@@ -242,7 +243,43 @@ function historicalFallbackText(location, weather, userProfile) {
   return `**${location} — ${weather.date}**\n\n${weather.icon} ${weather.description}. Temperature was ${temperature ?? 'unavailable'}°C (low ${weather.minTemp ?? '—'}°C, high ${weather.maxTemp ?? '—'}°C). ${rainText}`;
 }
 
-export async function processQuery(query, userLocation, history = [], userProfile = null) {
+export async function processQuery(query, userLocation, history = [], userProfile = null, conversationId = null, authToken = null) {
+  // 1. Primary: Use context-aware Supabase orchestration service
+  try {
+    const token = authToken || (await getFirebaseAuthToken());
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        conversationId: conversationId || null,
+        message: query,
+        location: userLocation || null,
+        userProfile: userProfile || null,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.message?.content) {
+        return {
+          type: 'text',
+          text: data.message.content,
+          conversationId: data.conversationId,
+          context: data.context,
+          source: data.message.metadata?.sources || ['WeatherGPT Multi-Source Engine'],
+          location: data.context?.location,
+          metadata: data.message.metadata,
+        };
+      }
+    }
+  } catch (apiErr) {
+    console.warn('[ChatEngine] Backend /api/chat unreachable, engaging client-side fallback:', apiErr.message);
+  }
+
+  // 2. Client-side fallback engine if network or server is offline
   const fallbackIntent = detectIntent(query);
   let location = userLocation || { lat: 28.6139, lon: 77.209, city: 'New Delhi', name: 'New Delhi', country: 'India' };
   const historicalDate = extractHistoricalDate(query);

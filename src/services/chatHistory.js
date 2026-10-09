@@ -4,6 +4,7 @@
  */
 
 import { supabase } from './supabaseClient.js';
+import { getFirebaseAuthToken } from './firebaseClient.js';
 
 const STORAGE_KEY_PREFIX = 'weathergpt_chat_history:';
 const GUEST_STORAGE_KEY = 'weathergpt_chat_history:guest';
@@ -38,7 +39,14 @@ export function setHistoryUser(email) {
 }
 
 function generateId() {
-  return 'conv_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
 }
 
 function getAutoTitle(messages, lang = 'en') {
@@ -172,75 +180,69 @@ export function clearAllHistory() {
 /** Fetches a user's conversation records from Supabase and refreshes
  * the local offline cache. A network/database failure deliberately leaves the
  * local cache untouched. */
-export async function hydrateConversationsFromSupabase(userEmail) {
+export async function hydrateConversationsFromSupabase(userEmail, authToken = null) {
   const email = normalizeEmail(userEmail);
   if (!email) return loadAllConversations();
 
-  const { data, error } = await supabase
-    .from('chat_conversations')
-    .select('id, title, messages, created_at, updated_at')
-    .eq('user_id', email)
-    .order('updated_at', { ascending: false })
-    .limit(MAX_CONVERSATIONS);
+  try {
+    const token = authToken || (await getFirebaseAuthToken());
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  if (error) throw error;
+    const res = await fetch('/api/conversations', { headers });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.conversations)) {
+        const cloudConversations = data.conversations.map((row) => ({
+          id: row.id,
+          title: row.title || 'New Chat',
+          context: row.context || {},
+          messages: [],
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }));
 
-  const cloudConversations = (data || []).map((row) => ({
-    id: row.id,
-    title: row.title,
-    messages: Array.isArray(row.messages) ? row.messages : [],
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
+        const mergedById = new Map();
+        [...loadAllConversations(), ...cloudConversations].forEach((conv) => {
+          const existing = mergedById.get(conv.id);
+          if (!existing || new Date(conv.updatedAt) >= new Date(existing.updatedAt)) {
+            mergedById.set(conv.id, {
+              ...conv,
+              messages: (existing && existing.messages?.length) ? existing.messages : conv.messages,
+            });
+          }
+        });
 
-  // Never allow an empty/partial cloud response to erase a user's offline
-  // history. Prefer the newest copy of every individual conversation.
-  const mergedById = new Map();
-  [...loadAllConversations(), ...cloudConversations].forEach((conversation) => {
-    const existing = mergedById.get(conversation.id);
-    if (!existing || new Date(conversation.updatedAt) >= new Date(existing.updatedAt)) {
-      mergedById.set(conversation.id, conversation);
+        const sorted = [...mergedById.values()]
+          .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+          .slice(0, MAX_CONVERSATIONS);
+        saveAllConversations(sorted);
+        return sorted;
+      }
     }
-  });
-  const conversations = [...mergedById.values()]
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
-    .slice(0, MAX_CONVERSATIONS);
-  saveAllConversations(conversations);
-  return conversations;
+  } catch (err) {
+    console.warn('[ChatHistory] /api/conversations fetch warning:', err.message);
+  }
+
+  return loadAllConversations();
 }
 
-export async function syncConversationToSupabase(userEmail, conversationId) {
-  const email = normalizeEmail(userEmail);
-  if (!email || !conversationId) return;
-  return enqueueCloudWrite(email, conversationId, async () => {
-    // Read the conversation when its turn reaches the queue, rather than when
-    // it is first scheduled. That always persists the newest local snapshot.
-    const conversation = loadConversation(conversationId);
-    if (!conversation) return;
-    const { error } = await supabase.from('chat_conversations').upsert({
-      id: conversation.id,
-      user_id: email,
-      title: conversation.title,
-      messages: conversation.messages,
-      created_at: conversation.createdAt,
-      updated_at: conversation.updatedAt,
-    }, { onConflict: 'id' });
-
-    if (error) throw error;
-  });
+export async function syncConversationToSupabase(userEmail, conversationId, authToken = null) {
+  // Syncing is now automatically handled per-turn by the /api/chat orchestration endpoint
+  // which saves messages and updated context in Supabase PostgreSQL transactionally.
+  return Promise.resolve();
 }
 
-export async function deleteConversationFromSupabase(userEmail, conversationId) {
-  const email = normalizeEmail(userEmail);
-  if (!email || !conversationId) return;
-  return enqueueCloudWrite(email, conversationId, async () => {
-    const { error } = await supabase
-      .from('chat_conversations')
-      .delete()
-      .eq('id', conversationId)
-      .eq('user_id', email);
-    if (error) throw error;
-  });
+export async function deleteConversationFromSupabase(userEmail, conversationId, authToken = null) {
+  if (!conversationId) return;
+  try {
+    const token = authToken || (await getFirebaseAuthToken());
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    await fetch(`/api/conversations/${conversationId}`, { method: 'DELETE', headers });
+  } catch (err) {
+    console.warn('[ChatHistory] Supabase delete warning:', err.message);
+  }
 }
 
 export async function syncAllConversationsToSupabase(userEmail) {

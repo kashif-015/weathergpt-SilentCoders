@@ -1,6 +1,14 @@
 import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
+import {
+  processConversationTurn,
+  listUserConversations,
+  getConversationDetails,
+  deleteUserConversation,
+  renameUserConversation,
+  authenticateRequestUser,
+} from './services/conversationManager.js';
 
 console.log('[SERVER] Environment loaded. OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓' : '✗', 'VITE_OPENAI_API_KEY:', process.env.VITE_OPENAI_API_KEY ? '✓' : '✗', 'GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? '✓' : '✗', 'VITE_GEMINI_API_KEY:', process.env.VITE_GEMINI_API_KEY ? '✓' : '✗');
 
@@ -613,6 +621,110 @@ app.post('/api/voice/synthesize', async (req, res) => {
     if (!response.ok) return res.status(response.status).json({ error: body.message || 'Sarvam synthesis failed.' });
     res.json({ audio: body.audios?.join('') || '' });
   } catch { res.status(502).json({ error: 'Sarvam text-to-speech is unavailable.' }); }
+});
+
+// ==============================================================================
+// Context-Aware Conversations & Chat Orchestration Endpoints
+// ==============================================================================
+
+/**
+ * POST /api/chat
+ * Primary conversation endpoint supporting context-aware memory & weather tools
+ */
+app.post('/api/chat', async (req, res) => {
+  const { conversationId, message, location, userProfile } = req.body || {};
+  const authHeader = req.headers.authorization || '';
+
+  try {
+    const result = await processConversationTurn({
+      conversationId: conversationId || null,
+      message: message || '',
+      location: location || null,
+      userProfile: userProfile || {},
+      authHeader,
+    });
+    return res.json(result);
+  } catch (error) {
+    const status = error.status || 500;
+    const msg = error.message || 'Internal conversation error';
+    console.error('[API /api/chat Error]:', status, msg);
+    return res.status(status).json({ error: msg });
+  }
+});
+
+/**
+ * GET /api/conversations
+ * Lists conversations for the authenticated user
+ */
+app.get('/api/conversations', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  try {
+    const user = await authenticateRequestUser(authHeader);
+    if (!user) {
+      return res.status(401).json({ error: 'Authentication required to list cloud conversations.' });
+    }
+    const conversations = await listUserConversations(user.id);
+    return res.json({ conversations });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Failed to list conversations' });
+  }
+});
+
+/**
+ * GET /api/conversations/:id
+ * Retrieves a single conversation with its message history & context
+ */
+app.get('/api/conversations/:id', async (req, res) => {
+  const conversationId = req.params.id;
+  const authHeader = req.headers.authorization || '';
+
+  try {
+    const user = await authenticateRequestUser(authHeader);
+    const details = await getConversationDetails(conversationId, user?.id || null);
+    return res.json(details);
+  } catch (err) {
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.message || 'Failed to retrieve conversation' });
+  }
+});
+
+/**
+ * DELETE /api/conversations/:id
+ * Deletes a conversation
+ */
+app.delete('/api/conversations/:id', async (req, res) => {
+  const conversationId = req.params.id;
+  const authHeader = req.headers.authorization || '';
+
+  try {
+    const user = await authenticateRequestUser(authHeader);
+    const result = await deleteUserConversation(conversationId, user?.id || null);
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Failed to delete conversation' });
+  }
+});
+
+/**
+ * PATCH /api/conversations/:id
+ * Renames a conversation title
+ */
+app.patch('/api/conversations/:id', async (req, res) => {
+  const conversationId = req.params.id;
+  const { title } = req.body || {};
+  const authHeader = req.headers.authorization || '';
+
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: 'Title is required.' });
+  }
+
+  try {
+    const user = await authenticateRequestUser(authHeader);
+    const result = await renameUserConversation(conversationId, title, user?.id || null);
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Failed to rename conversation' });
+  }
 });
 
 export default app;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getCurrentWeather, getForecast, getUserLocation, reverseGeocode, getStoredLocation, onLocationPermissionChange, geocodeCity } from './services/weatherService.js';
 import { processQuery } from './services/chatEngine.js';
-import { getCurrentUserProfile, signOutUser, observeAuthState, updateUserProfile } from './services/firebaseClient.js';
+import { getCurrentUserProfile, signOutUser, observeAuthState, updateUserProfile, getFirebaseAuthToken } from './services/firebaseClient.js';
 import { getTranslation } from './services/translations.js';
 import appMetadata from '../package.json';
 import { speakSarvamText } from './services/voiceService.js';
@@ -945,7 +945,8 @@ export default function App() {
         setActiveConvId(null);
         setMessages([]);
         try {
-          const cloudConversations = await hydrateConversationsFromSupabase(profile.email);
+          const authToken = await getFirebaseAuthToken();
+          const cloudConversations = await hydrateConversationsFromSupabase(profile.email, authToken);
           setConversations(cloudConversations);
           // Keep fresh new chat active
           syncAllConversationsToSupabase(profile.email).catch((error) => {
@@ -1081,7 +1082,8 @@ export default function App() {
     setActiveConvId(null);
     setMessages([]);
     try {
-      const cloudConversations = await hydrateConversationsFromSupabase(profileData?.email);
+      const authToken = await getFirebaseAuthToken();
+      const cloudConversations = await hydrateConversationsFromSupabase(profileData?.email, authToken);
       setConversations(cloudConversations);
       // Keep fresh new chat active
       syncAllConversationsToSupabase(profileData?.email).catch((error) => {
@@ -1091,6 +1093,7 @@ export default function App() {
       console.warn('Supabase chat-history sync unavailable; using local history.', error.message);
     }
   };
+
 
   const handleLogout = async () => {
     await signOutUser();
@@ -1119,12 +1122,37 @@ export default function App() {
     setMessages([]);
   };
 
-  const handleSelectConversation = (id) => {
+  const handleSelectConversation = async (id) => {
     const all = loadAllConversations();
     const conv = all.find(c => c.id === id);
     if (conv) {
       setActiveConvId(conv.id);
-      setMessages(conv.messages.map(m => ({ ...m, timestamp: new Date(m.timestamp) })));
+      setMessages((conv.messages || []).map(m => ({ ...m, timestamp: new Date(m.timestamp) })));
+    }
+
+    // Attempt to hydrate fresh messages and context from Supabase backend
+    try {
+      const authToken = await getFirebaseAuthToken();
+      const headers = {};
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      const res = await fetch(`/api/conversations/${id}`, { headers });
+      if (res.ok) {
+        const details = await res.json();
+        if (Array.isArray(details.messages) && details.messages.length > 0) {
+          const remoteMsgs = details.messages.map(m => ({
+            id: m.id,
+            role: m.role === 'user' ? 'user' : 'bot',
+            text: m.content,
+            type: 'text',
+            timestamp: new Date(m.created_at),
+            source: m.metadata?.sources || [],
+          }));
+          setMessages(remoteMsgs);
+          saveConversation(id, remoteMsgs, currentLang);
+        }
+      }
+    } catch {
+      // Offline fallback: keep local messages loaded above
     }
   };
 
@@ -1135,8 +1163,10 @@ export default function App() {
       if (remaining.length > 0) { handleSelectConversation(remaining[0].id); }
       else { setActiveConvId(null); setMessages([]); }
     }
-    deleteConversationFromSupabase(userProfile?.email, id).catch((error) => {
-      console.warn('Supabase conversation delete failed:', error.message);
+    getFirebaseAuthToken().then((token) => {
+      deleteConversationFromSupabase(userProfile?.email, id, token).catch((error) => {
+        console.warn('Supabase conversation delete failed:', error.message);
+      });
     });
   };
 
@@ -1161,18 +1191,24 @@ export default function App() {
 
     saveConversation(convId, newMessages, currentLang);
     setConversations(loadAllConversations());
-    syncConversationToSupabase(userProfile?.email, convId).catch((error) => {
-      console.warn('Supabase conversation sync failed:', error.message);
-    });
 
     try {
+      const authToken = await getFirebaseAuthToken();
       const activeProfile = userProfile ? { ...userProfile, language: currentLang } : { language: currentLang };
-      const response = await processQuery(text, currentLocation || location, messages, activeProfile);
+      const response = await processQuery(text, currentLocation || location, messages, activeProfile, convId, authToken);
+
+      // Keep active conversation ID in sync if server assigned a canonical UUID
+      if (response.conversationId && response.conversationId !== convId) {
+        convId = response.conversationId;
+        setActiveConvId(convId);
+      }
+
       const botMsg = {
         id: Date.now() + 1, role: 'bot', text: response.text,
-        type: response.type, data: response.data, severity: response.severity,
+        type: response.type || 'text', data: response.data, severity: response.severity,
         source: response.source, timestamp: new Date(),
         location: response.location, weather: response.weather,
+        context: response.context,
       };
       if (response.severity) setSeverity(response.severity);
       // ONLY update the dashboard's current location if the query explicitly requested live user location detection
@@ -1189,9 +1225,6 @@ export default function App() {
         setMessages(updated);
         saveConversation(convId, updated, currentLang);
         setConversations(loadAllConversations());
-        syncConversationToSupabase(userProfile?.email, convId).catch((error) => {
-          console.warn('Supabase conversation sync failed:', error.message);
-        });
         if (speakResponse) {
           setIsSpeaking(true);
           speakSarvamText(botMsg.text, currentLang === 'hi' ? 'hi-IN' : 'en-IN')
