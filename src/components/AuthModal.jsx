@@ -9,7 +9,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [occupation, setOccupation] = useState('Farmer');
+  const [occupation, setOccupation] = useState('');
   const [language, setLanguage] = useState(currentLang || 'en');
   const [age, setAge] = useState('');
   const [loading, setLoading] = useState(false);
@@ -89,7 +89,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
     setShowResendForLogin(false);
 
     if (mode === 'register') {
-      if (!name.trim() || !email.trim() || !password.trim() || !age) {
+      if (!name.trim() || !email.trim() || !password.trim() || !age || !occupation) {
         setErrorMsg(t('fillAllFields'));
         return;
       }
@@ -285,64 +285,35 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
               }}>
                 <Briefcase size={26} />
               </div>
-              <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: '0 0 6px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 6px' }}>
                 {language === 'hi' ? 'अपना व्यवसाय चुनें' : 'Choose Your Profession'}
               </h3>
-              <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
                 {language === 'hi'
                   ? 'Google से साइन इन करने से पहले अपना पेशा चुनें'
                   : 'Select your profession before continuing with Google'}
               </p>
             </div>
 
-            {/* Profession Options */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '18px' }}>
-              {[
-                { id: 'Farmer', icon: '🌾', en: 'Farmer / Agricultural Worker', hi: 'किसान (कृषि परामर्श विशेष पहुंच)', isHighlight: true },
-                { id: 'Student', icon: '🎓', en: 'Student / Learner', hi: 'विद्यार्थी / छात्र' },
-                { id: 'Software Tech', icon: '💻', en: 'Software / Tech Professional', hi: 'सॉफ्टवेयर / तकनीकी पेशेवर' },
-                { id: 'Business', icon: '💼', en: 'Business / Entrepreneur', hi: 'व्यापारी / उद्यमी' },
-                { id: 'Weather Researcher', icon: '🔬', en: 'Weather Researcher / Scientist', hi: 'मौसम शोधकर्ता / वैज्ञानिक' },
-                { id: 'Government Servant', icon: '🏛️', en: 'Government / Public Servant', hi: 'सरकारी कर्मचारी' },
-                { id: 'Other', icon: '🌐', en: 'Other', hi: 'अन्य' },
-              ].map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setGoogleProfession(p.id)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    padding: '10px 14px',
-                    borderRadius: '10px',
-                    border: googleProfession === p.id
-                      ? '2px solid #38bdf8'
-                      : p.isHighlight
-                      ? '1px solid rgba(52, 211, 153, 0.35)'
-                      : '1px solid rgba(255, 255, 255, 0.12)',
-                    background: googleProfession === p.id
-                      ? 'rgba(56, 189, 248, 0.15)'
-                      : p.isHighlight
-                      ? 'rgba(16, 185, 129, 0.08)'
-                      : 'rgba(255, 255, 255, 0.04)',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    transition: 'all 0.15s'
-                  }}
+            {/* Profession Select Dropdown */}
+            <div className="auth-form" style={{ marginBottom: '18px' }}>
+              <div className="auth-form__group">
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  {language === 'hi' ? 'व्यवसाय चुनें' : 'Select Profession'}
+                </label>
+                <select
+                  value={googleProfession}
+                  onChange={(e) => setGoogleProfession(e.target.value)}
                 >
-                  <span style={{ fontSize: '18px' }}>{p.icon}</span>
-                  <div style={{ flex: 1 }}>
-                    <strong style={{ fontSize: '13px', display: 'block', color: googleProfession === p.id ? '#38bdf8' : '#fff' }}>
-                      {language === 'hi' ? p.hi : p.en}
-                    </strong>
-                  </div>
-                  {googleProfession === p.id && (
-                    <CheckCircle2 size={18} style={{ color: '#38bdf8' }} />
-                  )}
-                </button>
-              ))}
+                  <option value="Farmer">{language === 'hi' ? '🌾 किसान (कृषि परामर्श विशेष पहुंच)' : '🌾 Farmer / Agricultural Worker'}</option>
+                  <option value="Student">{language === 'hi' ? '🎓 विद्यार्थी / छात्र' : '🎓 Student / Learner'}</option>
+                  <option value="Software Tech">{language === 'hi' ? '💻 सॉफ्टवेयर / तकनीकी पेशेवर' : '💻 Software / Tech Professional'}</option>
+                  <option value="Business">{language === 'hi' ? '💼 व्यापारी / उद्यमी' : '💼 Business / Entrepreneur'}</option>
+                  <option value="Weather Researcher">{language === 'hi' ? '🔬 मौसम शोधकर्ता / वैज्ञानिक' : '🔬 Weather Researcher / Scientist'}</option>
+                  <option value="Government Servant">{language === 'hi' ? '🏛️ सरकारी कर्मचारी' : '🏛️ Government / Public Servant'}</option>
+                  <option value="Other">{language === 'hi' ? '🌐 अन्य' : '🌐 Other'}</option>
+                </select>
+              </div>
             </div>
 
             {errorMsg && (
@@ -374,7 +345,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#94a3b8',
+                  color: 'var(--text-secondary)',
                   fontSize: '12px',
                   cursor: 'pointer',
                   padding: '6px'
@@ -478,6 +449,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, currentLang,
                         onChange={(e) => setOccupation(e.target.value)}
                         required
                       >
+                        <option value="" disabled>{language === 'hi' ? '-- व्यवसाय चुनें --' : '-- Select Occupation --'}</option>
                         <option value="Farmer">{t('occupations').farmer}</option>
                         <option value="Student">{t('occupations').student}</option>
                         <option value="Software Tech">{t('occupations').tech}</option>

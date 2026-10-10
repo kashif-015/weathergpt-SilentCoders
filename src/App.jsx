@@ -60,7 +60,6 @@ const PRIMARY_NAV_ITEMS = [
 ];
 
 const MORE_NAV_ITEMS = [
-  { id: 'home', label: 'Home Dashboard', icon: 'home' },
   { id: 'data', label: 'Data & APIs', icon: 'data' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
@@ -210,19 +209,6 @@ function SidebarRail({
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 20h9" />
             <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-          </svg>
-        </button>
-
-        {/* Home */}
-        <button
-          className={`sidebar-rail__btn ${activePage === 'home' ? 'sidebar-rail__btn--active' : ''}`}
-          onClick={() => onNavigate('home')}
-          data-tooltip="Home"
-          aria-label="Home"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-            <polyline points="9 22 9 12 15 12 15 22" />
           </svg>
         </button>
 
@@ -1526,7 +1512,14 @@ export default function App() {
         return <ForecastPage location={location} onBackToChat={() => handleNavigate('chat')} />;
 
       case 'alerts':
-        return <AlertsPage location={location} districtAlert={selectedDistrictAlert} onBackToChat={() => handleNavigate('chat')} />;
+        return (
+          <AlertsPage
+            location={location}
+            currentLang={currentLang}
+            districtAlert={selectedDistrictAlert}
+            onBackToChat={() => handleNavigate('chat')}
+          />
+        );
 
       case 'maps':
         return <WeatherMap location={location} onBack={() => handleNavigate('home')} onOpenDistrictWarning={(alert) => { setSelectedDistrictAlert(alert); setActivePage('alerts'); }} />;
