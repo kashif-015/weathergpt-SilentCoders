@@ -26,9 +26,9 @@ function formatHourHeader(timeStr, idx) {
   }
 }
 
-export default function WaveForecastCard({ forecast, className = '' }) {
-  // Only Daily and Hourly (Today section removed as requested)
-  const [tab, setTab] = useState('daily'); // 'daily' | 'hourly'
+export default function WaveForecastCard({ forecast, className = '', initialTab = 'hourly' }) {
+  // Hourly first as primary default, with Daily switchable
+  const [tab, setTab] = useState(initialTab); // 'hourly' | 'daily'
   const scrollRef = useRef(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(true);

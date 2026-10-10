@@ -211,15 +211,35 @@ export async function getBhuvanBoundaries(layer = 'district') {
   if (cached) return cached;
   const baseUrl = (ENV.VITE_BHUVAN_PROXY_URL || '').replace(/\/$/, '');
   const token = (ENV.VITE_BHUVAN_API_KEY || '').trim();
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const url = baseUrl ? `${baseUrl}${separator}layer=${encodeURIComponent(layer)}` : '';
-  const result = await getConfiguredJson(
-    'ISRO Bhuvan GIS',
-    url,
-    token ? { headers: { Authorization: `Bearer ${token}` } } : {}
-  );
-  setCached(cacheKey, result, TTL_MEDIUM);
-  return result;
+
+  if (baseUrl) {
+    try {
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      const url = `${baseUrl}${separator}layer=${encodeURIComponent(layer)}`;
+      const result = await getConfiguredJson(
+        'ISRO Bhuvan GIS',
+        url,
+        token ? { headers: { Authorization: `Bearer ${token}` } } : {}
+      );
+      if (result?.data) {
+        setCached(cacheKey, result, TTL_LONG);
+        return result;
+      }
+    } catch {
+      // Fall through to local fallback
+    }
+  }
+
+  // Built-in India District Boundaries fallback
+  try {
+    const res = await safeFetch('/india_districts.json');
+    const geojson = await res.json();
+    const result = { source: 'India District Boundaries', data: geojson, status: 'live' };
+    setCached(cacheKey, result, TTL_LONG);
+    return result;
+  } catch (err) {
+    return { source: 'District Boundaries', data: null, status: 'unavailable', error: err.message };
+  }
 }
 
 /* ==========================================================================

@@ -355,9 +355,9 @@ export default function ForecastPage({ location, onBackToChat }) {
         </section>
       )}
 
-      {/* Modern Wave Forecast Section: Today, Hourly & 15-Day Daily Forecast */}
+      {/* Modern Wave Forecast Section: Hourly & Daily Forecast */}
       {forecast && (
-        <WaveForecastCard forecast={forecast} current={current} />
+        <WaveForecastCard forecast={forecast} current={current} initialTab="hourly" />
       )}
 
       {/* AI Weather Insights */}
